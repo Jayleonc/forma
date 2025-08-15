@@ -29,6 +29,7 @@ def parse(
     fitz: Any = importlib.import_module("fitz")
     doc = fitz.open(str(input_path))
     text_chars = sum(len(page.get_text()) for page in doc)
+    doc.close()  # Ensure file is released promptly
 
     if text_chars >= 100:
         markdown = parse_text_pdf(str(input_path))
