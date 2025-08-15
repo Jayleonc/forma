@@ -6,7 +6,12 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { text = "MIT" }
 authors = [{ name = "Jayleonc", email = "jayleonc@gmail.com" }]
-dependencies = []
+dependencies = [
+  "typer",
+  "PyMuPDF",
+  "PyMuPDF4LLM",
+  "paddleocr-json",
+]
 
 [project.optional-dependencies]
 dev = [
