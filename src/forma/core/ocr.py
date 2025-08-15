@@ -1,8 +1,14 @@
+"""OCR utilities backed by a singleton PaddleOCR engine."""
+
 from __future__ import annotations
 
 from pathlib import Path
-import importlib
-from typing import Any, List
+from typing import Any, List, Optional
+import tempfile
+
+import fitz  # type: ignore
+
+_OCR_ENGINE: Optional[Any] = None
 
 
 def _extract_lines(data: Any) -> List[str]:
@@ -20,19 +26,42 @@ def _extract_lines(data: Any) -> List[str]:
     return lines
 
 
+def _get_ocr_engine() -> Any:
+    """Return a singleton instance of :class:`PaddleOCR`."""
+    global _OCR_ENGINE
+    if _OCR_ENGINE is None:
+        from paddleocr import PaddleOCR  # imported lazily for optional dependency
+
+        _OCR_ENGINE = PaddleOCR(structure_version="PP-StructureV3")
+    return _OCR_ENGINE
+
+
+def ocr_image_file(image_path: str) -> str:
+    """Run OCR on a single image and return the extracted text."""
+    engine = _get_ocr_engine()
+    result = engine.ocr(image_path, cls=True)
+    lines = _extract_lines(result)
+    return "\n".join(lines)
+
+
 def parse_scanned_pdf(pdf_path: str) -> str:
-    """Perform OCR on a scanned PDF and return Markdown text."""
+    """OCR each page of a scanned PDF by delegating to ``ocr_image_file``."""
     path = Path(pdf_path)
     if not path.exists():
         raise FileNotFoundError(f"PDF file not found: {pdf_path}")
 
-    try:
-        module = importlib.import_module("paddleocr_json.paddleocr_json")
-        PaddleOCR = getattr(module, "PaddleOCR")
-    except Exception as exc:  # pragma: no cover - depends on external package
-        raise RuntimeError("paddleocr-json is required for OCR parsing") from exc
+    texts: List[str] = []
+    doc = fitz.open(str(path))
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        for i, page in enumerate(doc):
+            pix = page.get_pixmap()
+            img_path = tmp / f"page_{i}.png"
+            pix.save(str(img_path))
+            texts.append(ocr_image_file(str(img_path)))
+    doc.close()
+    return "\n".join(texts)
 
-    ocr = PaddleOCR()
-    result = ocr.ocr(str(path))
-    lines = _extract_lines(result)
-    return "\n".join(lines)
+
+__all__ = ["ocr_image_file", "parse_scanned_pdf"]
+

@@ -10,6 +10,11 @@ dependencies = [
   "typer",
   "PyMuPDF",
   "PyMuPDF4LLM",
+  "paddleocr",
+  "paddlepaddle",
+  "pillow",
+  "tqdm",
+  "rich",
   "rapidocr-onnxruntime",
 ]
 

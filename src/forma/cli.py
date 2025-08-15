@@ -1,44 +1,54 @@
+"""Command line interface for the forma toolkit."""
+
 from __future__ import annotations
 
 from pathlib import Path
-import importlib
-from typing import Any
 
-from .core.parser import parse_text_pdf
-from .core.ocr import parse_scanned_pdf
+import typer
+from rich.console import Console
 
-# Dynamically import typer to avoid mandatory dependency at test time
-try:
-    typer: Any = importlib.import_module("typer")
-except Exception as exc:  # pragma: no cover - depends on external package
-    raise RuntimeError("typer is required for the CLI") from exc
+from .core.parser import parse_pdf
+from .core.ocr import ocr_image_file
+
+console = Console()
 
 app = typer.Typer()
 
 
 @app.command()
-def parse(
-    input_path: Path = typer.Option(
+def pdf(
+    input: Path = typer.Option(
         ..., exists=True, file_okay=True, dir_okay=False, help="Path to the input PDF"
     ),
-    output_path: Path = typer.Option(
+    output: Path = typer.Option(
         ..., file_okay=True, dir_okay=False, help="Where to write the output Markdown"
     ),
 ) -> None:
-    """Parse a PDF into Markdown, choosing OCR for scanned files."""
-    fitz: Any = importlib.import_module("fitz")
-    doc = fitz.open(str(input_path))
-    text_chars = sum(len(page.get_text()) for page in doc)
-    doc.close()  # Ensure file is released promptly
-
-    if text_chars >= 100:
-        markdown = parse_text_pdf(str(input_path))
-    else:
-        markdown = parse_scanned_pdf(str(input_path))
-
-    output_path.write_text(markdown, encoding="utf-8")
-    print(f"Parsing {input_path} to {output_path} completed.")
+    """Parse a PDF and write the resulting Markdown."""
+    markdown = parse_pdf(str(input))
+    output.write_text(markdown, encoding="utf-8")
+    console.print(
+        f"✔ Parsed [cyan]{input}[/] to [cyan]{output}[/]", style="green"
+    )
 
 
-if __name__ == "__main__":  # pragma: no cover - CLI entry point
+@app.command()
+def image(
+    input: Path = typer.Option(
+        ..., exists=True, file_okay=True, dir_okay=False, help="Path to the input image"
+    ),
+    output: Path = typer.Option(
+        ..., file_okay=True, dir_okay=False, help="Where to write the OCR text"
+    ),
+) -> None:
+    """Run OCR on a single image and write the text output."""
+    text = ocr_image_file(str(input))
+    output.write_text(text, encoding="utf-8")
+    console.print(
+        f"✔ OCR processed [cyan]{input}[/] to [cyan]{output}[/]", style="green"
+    )
+
+
+if __name__ == "__main__":  # pragma: no cover
     app()
+
