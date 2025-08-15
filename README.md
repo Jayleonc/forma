@@ -50,3 +50,24 @@ print(hello("world"))
 
 ---
 如需扩展CLI命令，请在`src/forma/cli.py`中添加。
+
+## 安装说明
+
+```bash
+pip install -e .
+```
+
+## CLI 使用示例
+
+```bash
+# 解析 PDF
+forma pdf --input samples/text_only.pdf --output output.md
+
+# 解析单张图片
+forma image --input samples/table_image.png --output output.txt
+```
+
+## 开发者指南
+
+- `src/forma/core/ocr.py` 使用单例模式管理 `PaddleOCR` 引擎，避免重复加载模型。
+- `src/forma/core/parser.py` 在解析 PDF 时并行处理嵌入图片的 OCR，并使用 `tqdm` 显示进度。
