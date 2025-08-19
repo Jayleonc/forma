@@ -53,8 +53,29 @@ print(hello("world"))
 
 ## 安装说明
 
+基础安装（仅图像 OCR，无 PDF 解析依赖）：
+
 ```bash
 pip install -e .
+```
+
+如需 PDF 解析，请安装可选依赖 `pdf`（包含 PyMuPDF 等）：
+
+```bash
+pip install -e .[pdf]
+```
+
+使用 uv（推荐，自动生成/使用 uv.lock）：
+
+```bash
+# 更新锁文件
+uv lock
+
+# 同步基础依赖（不含 PDF）
+uv sync
+
+# 同步包含 PDF 额外依赖
+uv sync --extra pdf
 ```
 
 ## CLI 使用示例
@@ -71,3 +92,5 @@ forma image --input samples/table_image.png --output output.txt
 
 - `src/forma/core/ocr.py` 使用单例模式管理 `PaddleOCR` 引擎，避免重复加载模型。
 - `src/forma/core/parser.py` 在解析 PDF 时并行处理嵌入图片的 OCR，并使用 `tqdm` 显示进度。
+
+提示：未安装 `pdf` 可选依赖时，调用 `parse_scanned_pdf()` 会提示安装 PyMuPDF。

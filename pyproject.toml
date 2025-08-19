@@ -8,14 +8,17 @@ license = { text = "MIT" }
 authors = [{ name = "Jayleonc", email = "jayleonc@gmail.com" }]
 dependencies = [
   "typer",
-  "PyMuPDF",
-  "PyMuPDF4LLM",
   "paddleocr",
   "paddlepaddle",
   "pillow",
   "tqdm",
   "rich",
   "rapidocr-onnxruntime",
+  # OpenCV wheels used by paddlex/paddleocr currently require NumPy 1.x
+  "numpy<2",
+  "openai",
+  "langchain",
+  "langchain-openai",
 ]
 
 [project.optional-dependencies]
@@ -23,6 +26,12 @@ dev = [
   "pytest>=8.3.0",
   "pytest-cov>=5.0.0",
   "ipython>=8.0.0",
+]
+pdf = [
+  # Pin PyMuPDF to a range with prebuilt wheels for macOS ARM + Python 3.12
+  "pymupdf>=1.24.10,<1.25",
+  # Keep flexible unless specific compatibility issues arise
+  "pymupdf4llm",
 ]
 
 [build-system]
