@@ -11,6 +11,7 @@ import tempfile
 
 from .ocr import parse_image_to_markdown
 from .vlm import VlmParser
+from ..utils.converters import convert_ppt_slide_to_image
 
 
 @dataclass
@@ -157,8 +158,6 @@ class PptxProcessor(Processor):
     def process(self, input_path: Path) -> ProcessingResult:
         from pptx import Presentation
         from pptx.enum.shapes import MSO_SHAPE_TYPE
-        import subprocess
-        import fitz
 
         path = Path(input_path)
         pres = Presentation(str(path))
@@ -199,27 +198,17 @@ class PptxProcessor(Processor):
 
             # Deep path for complex slides via LibreOffice + VLM
             if complex_indices:
-                pdf_path = tmp / f"{path.stem}.pdf"
-                cmd = [
-                    "libreoffice",
-                    "--headless",
-                    "--convert-to",
-                    "pdf",
-                    "--outdir",
-                    str(tmp),
-                    str(path),
-                ]
-                subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                doc = fitz.open(str(pdf_path))
                 vlm = VlmParser()
                 for idx in complex_indices:
-                    page = doc.load_page(idx)
-                    pix = page.get_pixmap()
-                    img_path = tmp / f"complex_{idx}.png"
-                    pix.save(str(img_path))
-                    slide_markdowns[idx] = vlm.parse(img_path)
-                    image_count += 1
-                doc.close()
+                    try:
+                        img_path = convert_ppt_slide_to_image(
+                            ppt_path=path, slide_index=idx, output_dir=tmp
+                        )
+                        slide_markdowns[idx] = vlm.parse(img_path)
+                        image_count += 1
+                    except (RuntimeError, ValueError) as e:
+                        # If conversion fails, add an error message to the markdown.
+                        slide_markdowns[idx] = f"_Error processing complex slide {idx + 1}: {e}_"
 
         markdown = "\n\n---\n\n".join(m for m in slide_markdowns if m)
         text_len = len(markdown.strip())

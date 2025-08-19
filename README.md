@@ -11,7 +11,7 @@
   - `fast`: 使用本地解析和 OCR，速度快，适用于文本型文档。
   - `deep`: 调用强大的视觉语言模型（VLM），由可定制的提示词驱动，精准处理扫描件、复杂排版和图片内容。
   - `auto`: 智能路由，自动为每个文件选择 `fast` 或 `deep` 策略。
-- **广泛的格式支持**: 支持 PDF、DOCX、PNG、JPG 等常见文档和图片格式。
+- **广泛的格式支持**: 支持 PDF、DOCX、PPTX、PNG、JPG 等常见文档和图片格式。
 - **高度可扩展**: 模块化的处理器架构，方便未来添加新的文件格式支持。
 - **提示词工程**: 将提示词与代码分离到 `prompts.yaml`，方便用户按需定制。
 
@@ -30,6 +30,20 @@ make deps
 1. 创建 `.venv` 虚拟环境。
 2. 根据 `pyproject.toml` 生成 `uv.lock` 锁文件。
 3.严格按照锁文件安装所有依赖，确保环境一致性。
+
+#### 系统依赖
+
+为了完整支持所有功能，特别是 `.pptx` 文件的深度解析，您需要在系统中安装 `LibreOffice`：
+
+```bash
+# macOS
+brew install --cask libreoffice
+
+# Ubuntu/Debian
+sudo apt-get install libreoffice
+```
+
+`forma` 会通过命令行调用 `libreoffice` 来实现 PPTX 到 PDF 的转换。
 
 ### 2. 配置 API 密钥
 
@@ -96,6 +110,13 @@ forma convert "./data" -o "./output" -s auto
       1. **优先使用 `mammoth`**：将 DOCX 转换为 HTML，再转换为 Markdown，能较好地还原表格、列表和格式。
       2. **回退至 `python-docx`**：如果前一步失败，则启用基于 `python-docx` 的备用方案，逐一解析段落和表格，确保内容不丢失。
     - **Image**: 使用 `paddleocr` 进行本地 OCR。
+    - **PPTX**: 采用智能的**混合策略**，对每一页幻灯片进行独立分析：
+      1. **启发式判断**: 遍历每一页幻灯片，通过计算文本量来判断其是“内容页”还是“复杂页”（如图表、纯图页）。
+      2. **内容页处理 (Fast Path)**: 对于文本内容充足的页面，直接使用 `python-pptx` 提取文本，并对页内图片进行 OCR。
+      3. **复杂页处理 (Deep Path)**: 对于文本量极少的页面，自动调用深度解析流程：
+         - 使用 **`LibreOffice`** 将PPTX转换为PDF。
+         - 从PDF中精确提取该复杂页为一张图片。
+         - 将此图片交由 **VLM** 进行视觉理解。
 
 2.  **`deep` 策略**: 
     - 将文档页面或图片发送给视觉语言模型（如 `qwen-vl-max`）。

@@ -54,20 +54,16 @@ def test_pptx_processor(monkeypatch, tmp_path):
 
     monkeypatch.setattr("forma.core.processors.VlmParser", DummyVlm)
 
-    # Stub LibreOffice conversion
-    def fake_run(cmd, check, stdout=None, stderr=None):
-        outdir = Path(cmd[cmd.index("--outdir") + 1])
-        out_pdf = outdir / (Path(cmd[-1]).stem + ".pdf")
-        import fitz
+    # Stub the new converter utility
+    def fake_converter(ppt_path: Path, slide_index: int, output_dir: Path) -> Path:
+        """A mock for the converter that creates a dummy image."""
+        img_path = output_dir / f"complex_slide_{slide_index}.png"
+        Image.new("RGB", (10, 10), color="blue").save(img_path)
+        return img_path
 
-        doc = fitz.open()
-        doc.new_page()
-        doc.new_page()
-        doc.save(out_pdf)
-        doc.close()
-        return types.SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "forma.core.processors.convert_ppt_slide_to_image", fake_converter
+    )
 
     processor = PptxProcessor()
     result = processor.process(pptx_path)

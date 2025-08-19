@@ -75,7 +75,9 @@ def iter_block_items(parent: Union[DocumentObject, _Cell]) -> Iterator[Union[Par
 
 
 def docx_to_markdown_gfm(path: str) -> str:
-    """Converts a DOCX file to Markdown using python-docx (Plan A)."""
+    """
+    Converts a DOCX file to Markdown using python-docx (Plan A).
+    """
     doc = Document(path)
     parts = []
     for block in iter_block_items(doc):
