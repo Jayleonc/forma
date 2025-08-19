@@ -9,10 +9,11 @@
 - **统一的命令行接口**: 所有操作都通过 `forma convert` 命令完成，清晰易用。
 - **多种处理策略**: 
   - `fast`: 使用本地解析和 OCR，速度快，适用于文本型文档。
-  - `deep`: 调用强大的视觉语言模型（VLM），精准处理扫描件、复杂排版和图片内容。
+  - `deep`: 调用强大的视觉语言模型（VLM），由可定制的提示词驱动，精准处理扫描件、复杂排版和图片内容。
   - `auto`: 智能路由，自动为每个文件选择 `fast` 或 `deep` 策略。
 - **广泛的格式支持**: 支持 PDF、DOCX、PNG、JPG 等常见文档和图片格式。
 - **高度可扩展**: 模块化的处理器架构，方便未来添加新的文件格式支持。
+- **提示词工程**: 将提示词与代码分离到 `prompts.yaml`，方便用户按需定制。
 
 ## 🚀 快速上手
 
@@ -28,7 +29,7 @@ make deps
 该命令会自动执行以下操作：
 1. 创建 `.venv` 虚拟环境。
 2. 根据 `pyproject.toml` 生成 `uv.lock` 锁文件。
-3. 严格按照锁文件安装所有依赖，确保环境一致性。
+3.严格按照锁文件安装所有依赖，确保环境一致性。
 
 ### 2. 配置 API 密钥
 
@@ -64,25 +65,27 @@ forma convert "./data" -o "./output" -s auto
 重构后的 `forma` 采用分层、模块化的架构：
 
 ```
-src/forma/
-├── __init__.py
-├── cli.py            # 命令行接口 (Typer)
-├── config.py         # 配置管理 (Pydantic)
-├── controller.py     # 业务流程控制器
-├── types.py          # 项目通用类型定义
-├── utils/            # 通用工具模块
-│   └── docx.py       # DOCX 处理辅助函数
-└── core/
+. (项目根目录)
+├── prompts.yaml      # VLM 提示词配置文件
+└── src/forma/
     ├── __init__.py
-    ├── processors.py # 各文件类型的处理器 (PDF, DOCX, Image)
-    └── vlm.py          # 视觉语言模型 (VLM) 抽象层
+    ├── cli.py            # 命令行接口 (Typer)
+    ├── config.py         # 配置管理 (Pydantic)
+    ├── controller.py     # 业务流程控制器
+    ├── types.py          # 项目通用类型定义
+    ├── utils/            # 通用工具模块
+    └── core/
+        ├── __init__.py
+        ├── processors.py # 各文件类型的处理器
+        ├── prompt_manager.py # 提示词管理器
+        └── vlm.py          # 视觉语言模型 (VLM) 抽象层
 ```
 
+- **`prompts.yaml`**: 定义 `deep` 策略使用的所有提示词，易于修改和扩展。
 - **`cli.py`**: 定义用户交互的命令行界面。
 - **`controller.py`**: 核心协调器，根据用户输入和策略，调用相应的处理器。
-- **`processors.py`**: 包含不同文件格式的具体处理逻辑（`fast` 策略）。
-- **`vlm.py`**: 封装了对 VLM 的调用（`deep` 策略）。
-- **`utils/`**: 存放可重用的辅助函数，如 DOCX 到 Markdown 的转换逻辑。
+- **`prompt_manager.py`**: 负责从 `prompts.yaml` 加载和管理提示词。
+- **`vlm.py`**: 封装对 VLM 的调用，通过 `PromptManager` 获取提示词并发起请求。
 - **`config.py`**: 负责加载 `.env` 文件中的配置和密钥。
 
 ## 💡 工作原理
@@ -95,9 +98,40 @@ src/forma/
     - **Image**: 使用 `paddleocr` 进行本地 OCR。
 
 2.  **`deep` 策略**: 
-    - 将文档页面或图片发送给视觉语言模型（当前使用 `langchain` 集成的 `qwen-vl-max`），由其直接生成详细的 Markdown 描述。
+    - 将文档页面或图片发送给视觉语言模型（如 `qwen-vl-max`）。
+    - 调用过程由 `prompts.yaml` 文件驱动。它会加载一个具名 prompt（默认为 `default_image_description`），该 prompt 包含精心设计的 `system` 和 `user` 指令，引导模型生成高质量的 Markdown 文本。
 
 3.  **`auto` 策略**:
     - 首先执行 `fast` 策略。
     - 对结果进行简单分析（如字符数、置信度等）。
     - 如果 `fast` 策略的结果质量不佳（例如，从扫描版 PDF 中只提取到很少的文字），则自动升级，调用 `deep` 策略进行重新处理。
+
+## 🔧 提示词工程 (Prompt Engineering)
+
+`forma` 的 `deep` 策略的核心是可定制的提示词工程。所有提示词都在项目根目录的 `prompts.yaml` 文件中进行管理，实现了逻辑与提示的分离。
+
+### 文件结构
+
+`prompts.yaml` 结构如下：
+
+```yaml
+prompts:
+  # 默认的图片/页面描述提示
+  default_image_description:
+    user: >-
+      请详细描述这张图片或页面的内容...
+
+  # 用于分析技术架构图的专用提示
+  technical_diagram_analysis:
+    system: >-
+      你是一位专业的系统架构师...
+    user: >-
+      请以专业的视角分析这张系统架构图...
+
+  # ... 可添加更多自定义提示
+```
+
+### 如何定制
+
+- **修改现有提示**: 直接编辑 `prompts.yaml` 中 `user` 或 `system` 的内容，即可改变模型的行为，无需修改任何 Python 代码。
+- **添加新提示**: 你可以按照格式添加新的具名提示（如 `my_custom_prompt`），并在代码中（未来可能通过命令行参数）调用它，以适应特定的文档处理需求。
