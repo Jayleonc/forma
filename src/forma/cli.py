@@ -2,53 +2,47 @@
 
 from __future__ import annotations
 
+from enum import Enum
 from pathlib import Path
+from typing import List
 
 import typer
 from rich.console import Console
-
-from .core.parser import parse_pdf
-from .core.ocr import ocr_image_file
 
 console = Console()
 
 app = typer.Typer()
 
 
-@app.command()
-def pdf(
-    input: Path = typer.Option(
-        ..., exists=True, file_okay=True, dir_okay=False, help="Path to the input PDF"
-    ),
-    output: Path = typer.Option(
-        ..., file_okay=True, dir_okay=False, help="Where to write the output Markdown"
-    ),
-) -> None:
-    """Parse a PDF and write the resulting Markdown."""
-    markdown = parse_pdf(str(input))
-    output.write_text(markdown, encoding="utf-8")
-    console.print(
-        f"✔ Parsed [cyan]{input}[/] to [cyan]{output}[/]", style="green"
-    )
+class Strategy(str, Enum):
+    """Execution strategy for conversion."""
+
+    AUTO = "auto"
+    FAST = "fast"
+    DEEP = "deep"
 
 
 @app.command()
-def image(
-    input: Path = typer.Option(
-        ..., exists=True, file_okay=True, dir_okay=False, help="Path to the input image"
+def convert(
+    inputs: List[Path] = typer.Argument(
+        ..., help="一个或多个输入文件/文件夹路径",
     ),
-    output: Path = typer.Option(
-        ..., file_okay=True, dir_okay=False, help="Where to write the OCR text"
+    output_dir: Path = typer.Option(
+        ..., "--output", "-o", help="统一的输出文件夹",
+    ),
+    strategy: Strategy = typer.Option(
+        Strategy.AUTO, "--strategy", "-s", help="选择处理策略",
+    ),
+    recursive: bool = typer.Option(
+        True, "--recursive/--no-recursive", help="是否递归处理文件夹",
     ),
 ) -> None:
-    """Run OCR on a single image and write the text output."""
-    text = ocr_image_file(str(input))
-    output.write_text(text, encoding="utf-8")
-    console.print(
-        f"✔ OCR processed [cyan]{input}[/] to [cyan]{output}[/]", style="green"
-    )
+    """智能转换文档 (PDF, DOCX, 图片) 为 Markdown。"""
+
+    from .controller import run_conversion
+
+    run_conversion(inputs, output_dir, strategy, recursive)
 
 
 if __name__ == "__main__":  # pragma: no cover
     app()
-
