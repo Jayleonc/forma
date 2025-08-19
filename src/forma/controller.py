@@ -23,6 +23,7 @@ def run_conversion(
     output_dir: Path,
     strategy: Strategy,
     recursive: bool,
+    prompt_name: str = "default_image_description",
 ) -> None:
     """Entry point invoked by the CLI."""
 
@@ -30,7 +31,7 @@ def run_conversion(
     output_dir.mkdir(parents=True, exist_ok=True)
     vlm_parser = None if strategy == Strategy.FAST else VlmParser()
     for path in files:
-        _process_single_file(path, output_dir, strategy, vlm_parser)
+        _process_single_file(path, output_dir, strategy, vlm_parser, prompt_name)
 
 
 def _discover_files(inputs: List[Path], recursive: bool) -> List[Path]:
@@ -62,6 +63,7 @@ def _process_single_file(
     output_dir: Path,
     strategy: Strategy,
     vlm_parser: VlmParser | None = None,
+    prompt_name: str = "default_image_description",
 ) -> None:
     processor = _select_processor(path)
     if processor is None:
@@ -71,7 +73,7 @@ def _process_single_file(
 
     if strategy == Strategy.DEEP:
         parser = vlm_parser or VlmParser()
-        markdown = parser.parse(path, prompt="请详细描述图片的内容，包括标题、正文和具体的内容，无关的字符除外")
+        markdown = parser.parse(path, prompt_name=prompt_name)
         output_path.write_text(markdown, encoding="utf-8")
         return
 
@@ -81,7 +83,7 @@ def _process_single_file(
     if strategy == Strategy.AUTO:
         if result.low_confidence or result.text_char_count < THRESHOLD:
             parser = vlm_parser or VlmParser()
-            final_md = parser.parse(path, prompt="请详细描述图片的内容，包括标题、正文和具体的内容，无关的字符除外")
+            final_md = parser.parse(path, prompt_name=prompt_name)
 
     output_path.write_text(final_md, encoding="utf-8")
 
