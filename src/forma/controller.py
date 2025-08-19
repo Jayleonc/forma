@@ -10,6 +10,7 @@ from .core.processors import (
     DocxProcessor,
     ImageProcessor,
     PdfProcessor,
+    PptxProcessor,
     Processor,
     ProcessingResult,
 )
@@ -55,6 +56,8 @@ def _select_processor(path: Path) -> Processor | None:
         return ImageProcessor()
     if suffix == ".docx":
         return DocxProcessor()
+    if suffix == ".pptx":
+        return PptxProcessor()
     return None
 
 
