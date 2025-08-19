@@ -10,6 +10,7 @@ from typing import List
 import tempfile
 
 from .ocr import parse_image_to_markdown
+from .vlm import VlmParser
 
 
 @dataclass
@@ -148,10 +149,93 @@ class DocxProcessor(Processor):
         )
 
 
+class PptxProcessor(Processor):
+    """Processor for PPTX files with slide-wise heuristics."""
+
+    COMPLEX_THRESHOLD = 25
+
+    def process(self, input_path: Path) -> ProcessingResult:
+        from pptx import Presentation
+        from pptx.enum.shapes import MSO_SHAPE_TYPE
+        import subprocess
+        import fitz
+
+        path = Path(input_path)
+        pres = Presentation(str(path))
+        slide_count = len(pres.slides)
+
+        # placeholders for ordered markdown output
+        slide_markdowns: List[str] = ["" for _ in range(slide_count)]
+        complex_indices: List[int] = []
+        image_count = 0
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            # First pass: extract text/images and decide complexity
+            for idx, slide in enumerate(pres.slides):
+                texts: List[str] = []
+                images: List[Path] = []
+                for shape in slide.shapes:
+                    if getattr(shape, "has_text_frame", False):
+                        text = shape.text.strip()
+                        if text:
+                            texts.append(text)
+                    if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                        image = shape.image
+                        ext = image.ext or "png"
+                        img_path = tmp / f"slide{idx}_{len(images)}.{ext}"
+                        img_path.write_bytes(image.blob)
+                        images.append(img_path)
+                slide_text = "\n".join(texts)
+                char_count = len(slide_text.replace("\n", "").strip())
+                if char_count < self.COMPLEX_THRESHOLD:
+                    complex_indices.append(idx)
+                else:
+                    ocr_texts = [parse_image_to_markdown(str(p)) for p in images]
+                    if ocr_texts:
+                        slide_text = (slide_text + "\n\n" + "\n\n".join(ocr_texts)).strip()
+                    slide_markdowns[idx] = slide_text
+                    image_count += len(images)
+
+            # Deep path for complex slides via LibreOffice + VLM
+            if complex_indices:
+                pdf_path = tmp / f"{path.stem}.pdf"
+                cmd = [
+                    "libreoffice",
+                    "--headless",
+                    "--convert-to",
+                    "pdf",
+                    "--outdir",
+                    str(tmp),
+                    str(path),
+                ]
+                subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                doc = fitz.open(str(pdf_path))
+                vlm = VlmParser()
+                for idx in complex_indices:
+                    page = doc.load_page(idx)
+                    pix = page.get_pixmap()
+                    img_path = tmp / f"complex_{idx}.png"
+                    pix.save(str(img_path))
+                    slide_markdowns[idx] = vlm.parse(img_path)
+                    image_count += 1
+                doc.close()
+
+        markdown = "\n\n---\n\n".join(m for m in slide_markdowns if m)
+        text_len = len(markdown.strip())
+        return ProcessingResult(
+            markdown_content=markdown,
+            text_char_count=text_len,
+            image_count=image_count,
+            low_confidence=text_len == 0,
+        )
+
+
 __all__ = [
     "ProcessingResult",
     "Processor",
     "PdfProcessor",
     "ImageProcessor",
     "DocxProcessor",
+    "PptxProcessor",
 ]

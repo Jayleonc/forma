@@ -5,6 +5,7 @@ from .processors import (
     PdfProcessor,
     ImageProcessor,
     DocxProcessor,
+    PptxProcessor,
     ProcessingResult,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "PdfProcessor",
     "ImageProcessor",
     "DocxProcessor",
+    "PptxProcessor",
     "ProcessingResult",
 ]
