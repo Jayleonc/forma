@@ -44,6 +44,12 @@ def convert(
     recursive: bool = typer.Option(
         True, "--recursive/--no-recursive", help="递归处理目录。"
     ),
+    prompt_name: str = typer.Option(
+        "default_image_description",
+        "--prompt",
+        "-p",
+        help="要使用的 VLM Prompt 名称。",
+    ),
 ) -> None:
     """转换文档 (PDF, DOCX, 图片) 为 Markdown。
 
@@ -58,7 +64,11 @@ def convert(
 
     try:
         run_conversion(
-            inputs=inputs, output_dir=output_dir, strategy=strategy, recursive=recursive
+            inputs=inputs,
+            output_dir=output_dir,
+            strategy=strategy,
+            recursive=recursive,
+            prompt_name=prompt_name,
         )
         console.print("\n[bold green]✔ 转换完成.[/]")
     except Exception as e:

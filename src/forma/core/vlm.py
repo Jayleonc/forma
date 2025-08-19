@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Any
 import base64
 import tempfile
 
 import mimetypes
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from ..config import get_vlm_config
+from .prompt_manager import PromptManager
 
 
 def _guess_mime_type(path: Path) -> str:
@@ -29,9 +30,9 @@ class VlmParser:
         self.client = ChatOpenAI(
             model=cfg.model, api_key=cfg.api_key, base_url=cfg.base_url
         )
-
-    def _call_api(self, image_paths: List[Path], prompt: str) -> str:
-        content = [{"type": "text", "text": prompt}]
+        self.prompt_manager = PromptManager()
+    def _call_api(self, image_paths: List[Path], prompt: Dict[str, Any]) -> str:
+        content = [{"type": "text", "text": prompt.get("user", "")}]
         for path in image_paths:
             b64_string = base64.b64encode(path.read_bytes()).decode("utf-8")
             mime_type = _guess_mime_type(path)
@@ -42,12 +43,19 @@ class VlmParser:
                 }
             )
 
-        msg = HumanMessage(content=content)
-        result = self.client.invoke([msg])
+        messages = []
+        system_prompt = prompt.get("system")
+        if system_prompt:
+            messages.append(SystemMessage(content=system_prompt))
+        messages.append(HumanMessage(content=content))
+
+        result = self.client.invoke(messages)
         return getattr(result, "content", "") or ""
 
-    def parse(self, path: Path, prompt: str) -> str:
+    def parse(self, path: Path, prompt_name: str = "default_image_description") -> str:
         """Parse an image or PDF via the VLM service and return Markdown text."""
+
+        prompt = self.prompt_manager.get_prompt(prompt_name)
 
         if path.suffix.lower() == ".pdf":
             image_paths: List[Path] = []
