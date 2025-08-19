@@ -33,6 +33,9 @@ pdf = [
   # Keep flexible unless specific compatibility issues arise
   "pymupdf4llm",
 ]
+docx = [
+  "python-docx",
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]
