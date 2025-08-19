@@ -35,8 +35,8 @@ class PdfProcessor(Processor):
     """Processor for PDF files using PyMuPDF and OCR."""
 
     def process(self, input_path: Path) -> ProcessingResult:
-        import pymupdf4llm  # type: ignore
-        import fitz  # type: ignore
+        import pymupdf4llm
+        import fitz
 
         path = Path(input_path)
         base_md = pymupdf4llm.to_markdown(str(path))
@@ -100,19 +100,44 @@ class ImageProcessor(Processor):
 
 
 class DocxProcessor(Processor):
-    """Processor for DOCX files using python-docx."""
+    """Processor for DOCX files using a hybrid approach."""
 
     def process(self, input_path: Path) -> ProcessingResult:
-        from docx import Document  # type: ignore
+        path = str(input_path)
+        md = None
 
-        doc = Document(str(input_path))
-        paragraphs = [p.text for p in doc.paragraphs if p.text]
-        md = "\n\n".join(paragraphs)
+        # Plan B: High-fidelity conversion with Mammoth
+        # 把 Docs 转成 HTML，再转成 Markdown（保留表格结构）
+        try:
+            import mammoth 
+            import markdownify 
+
+            with open(path, "rb") as f:
+                html = mammoth.convert_to_html(f).value
+
+            # 转换 HTML 到 Markdown，保留表格结构
+            md = markdownify.markdownify(html, heading_style="ATX").strip()
+        except Exception:
+            # 如果转换失败，使用 Plan A
+            md = None
+
+        # Plan A: Fallback to pure python-docx for robustness
+        # 如果 Plan B 失败，使用 Plan A
+        if not md:
+            from forma.utils.docx import docx_to_markdown_gfm
+
+            md = docx_to_markdown_gfm(path)
+
         text_len = len(md.strip())
 
+        # Count images using python-docx (as a basic heuristic)
+        # 计算图片数量
+        from docx import Document 
+
+        doc = Document(path)
         image_count = 0
-        for rel in doc.part._rels.values():  # type: ignore[attr-defined]
-            if "image" in rel.target_ref:  # type: ignore[attr-defined]
+        for rel in doc.part._rels.values():
+            if "image" in rel.target_ref:
                 image_count += 1
 
         return ProcessingResult(

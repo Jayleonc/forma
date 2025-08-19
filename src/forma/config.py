@@ -17,9 +17,11 @@ def get_vlm_config() -> VlmConfig:
     """Load VLM related configuration from environment variables."""
 
     return VlmConfig(
-        api_key=os.getenv("VLM_API_KEY", ""),
-        base_url=os.getenv("VLM_BASE_URL"),
-        model=os.getenv("VLM_MODEL", "gpt-4o-mini"),
+        api_key=os.getenv(
+            "VLM_API_KEY", "FZXGWA5LOJQI7WSGUBOZJWYHG8Q7UHH2YF9QQXAX"),
+        base_url=os.getenv("VLM_BASE_URL", "https://ai.gitee.com/v1"),
+        # https://ai.gitee.com/serverless-api/packages/1492
+        model=os.getenv("VLM_MODEL", "InternVL2-8B"),
     )
 
 

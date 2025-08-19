@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
-from .cli import Strategy
+from .types import Strategy
 from .core.processors import (
     DocxProcessor,
     ImageProcessor,
@@ -71,7 +71,7 @@ def _process_single_file(
 
     if strategy == Strategy.DEEP:
         parser = vlm_parser or VlmParser()
-        markdown = parser.parse(path, prompt="请将文档转换为Markdown格式")
+        markdown = parser.parse(path, prompt="请详细描述图片的内容，包括标题、正文和具体的内容，无关的字符除外")
         output_path.write_text(markdown, encoding="utf-8")
         return
 
@@ -81,7 +81,7 @@ def _process_single_file(
     if strategy == Strategy.AUTO:
         if result.low_confidence or result.text_char_count < THRESHOLD:
             parser = vlm_parser or VlmParser()
-            final_md = parser.parse(path, prompt="请将文档转换为Markdown格式")
+            final_md = parser.parse(path, prompt="请详细描述图片的内容，包括标题、正文和具体的内容，无关的字符除外")
 
     output_path.write_text(final_md, encoding="utf-8")
 

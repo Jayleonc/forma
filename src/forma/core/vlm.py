@@ -7,9 +7,18 @@ from typing import List
 import base64
 import tempfile
 
-from openai import OpenAI
+import mimetypes
+
+from langchain_core.messages import HumanMessage
+from langchain_openai import ChatOpenAI
 
 from ..config import get_vlm_config
+
+
+def _guess_mime_type(path: Path) -> str:
+    """Guess the mime type of a file."""
+    mime, _ = mimetypes.guess_type(path)
+    return mime or "image/png"
 
 
 class VlmParser:
@@ -17,32 +26,32 @@ class VlmParser:
 
     def __init__(self) -> None:
         cfg = get_vlm_config()
-        self.client = OpenAI(api_key=cfg.api_key, base_url=cfg.base_url)
-        self.model = cfg.model or "gpt-4o-mini"
-
-    def _encode_image(self, path: Path) -> str:
-        return base64.b64encode(path.read_bytes()).decode("utf-8")
-
-    def _call_api(self, images: List[str], prompt: str) -> str:
-        content = [{"type": "text", "text": prompt}]
-        for img in images:
-            content.append({"type": "input_image", "image_base64": img})
-
-        resp = self.client.responses.create(
-            model=self.model,
-            input=[{"role": "user", "content": content}],
+        self.client = ChatOpenAI(
+            model=cfg.model, api_key=cfg.api_key, base_url=cfg.base_url
         )
-        try:  # Extract text field from response
-            return resp.output[0].content[0].text  # type: ignore[index]
-        except Exception:
-            return ""
+
+    def _call_api(self, image_paths: List[Path], prompt: str) -> str:
+        content = [{"type": "text", "text": prompt}]
+        for path in image_paths:
+            b64_string = base64.b64encode(path.read_bytes()).decode("utf-8")
+            mime_type = _guess_mime_type(path)
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{b64_string}"},
+                }
+            )
+
+        msg = HumanMessage(content=content)
+        result = self.client.invoke([msg])
+        return getattr(result, "content", "") or ""
 
     def parse(self, path: Path, prompt: str) -> str:
         """Parse an image or PDF via the VLM service and return Markdown text."""
 
         if path.suffix.lower() == ".pdf":
-            images: List[str] = []
-            import fitz  # type: ignore
+            image_paths: List[Path] = []
+            import fitz
 
             doc = fitz.open(str(path))
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -51,12 +60,11 @@ class VlmParser:
                     pix = page.get_pixmap()
                     img_path = tmp / f"page_{i}.png"
                     pix.save(str(img_path))
-                    images.append(self._encode_image(img_path))
-            doc.close()
-            return self._call_api(images, prompt)
+                    image_paths.append(img_path)
+                doc.close()
+                return self._call_api(image_paths, prompt)
         else:
-            img = self._encode_image(path)
-            return self._call_api([img], prompt)
+            return self._call_api([path], prompt)
 
 
 __all__ = ["VlmParser"]
