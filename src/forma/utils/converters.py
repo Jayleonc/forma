@@ -2,11 +2,31 @@
 
 from __future__ import annotations
 
+import platform
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 import fitz  # PyMuPDF
+
+
+def _find_libreoffice_path() -> str | None:
+    """Finds the path to the LibreOffice executable."""
+    # On macOS, check the default application path first
+    if platform.system() == "Darwin":
+        mac_path = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+        if Path(mac_path).exists():
+            return mac_path
+
+    # For other systems or if not in the default Mac location, check PATH
+    for cmd in ["libreoffice", "soffice"]:
+        path = shutil.which(cmd)
+        if path:
+            return path
+
+    return None
+
 
 
 def convert_ppt_slide_to_image(
@@ -36,8 +56,9 @@ def convert_ppt_slide_to_image(
 
         # Step 1: Convert PPTX to PDF using LibreOffice
         try:
+            libreoffice_path = _find_libreoffice_path()
             cmd = [
-                "libreoffice",
+                libreoffice_path,
                 "--headless",
                 "--convert-to",
                 "pdf",

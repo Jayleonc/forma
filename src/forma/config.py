@@ -5,23 +5,35 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 
+from dotenv import load_dotenv
+
+# Load .env file at the application's entry point
+load_dotenv()
+
 
 @dataclass
 class VlmConfig:
+    """Configuration for the Vision Language Model."""
+
     api_key: str
+    model: str
     base_url: str | None = None
-    model: str | None = None
+    auto_threshold: int = 200
 
 
 def get_vlm_config() -> VlmConfig:
     """Load VLM related configuration from environment variables."""
+    api_key = os.getenv("FORMA_OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "API key not found. Please set FORMA_OPENAI_API_KEY in your .env file."
+        )
 
     return VlmConfig(
-        api_key=os.getenv(
-            "VLM_API_KEY", "FZXGWA5LOJQI7WSGUBOZJWYHG8Q7UHH2YF9QQXAX"),
-        base_url=os.getenv("VLM_BASE_URL", "https://ai.gitee.com/v1"),
-        # https://ai.gitee.com/serverless-api/packages/1492
-        model=os.getenv("VLM_MODEL", "InternVL2-8B"),
+        api_key=api_key,
+        model=os.getenv("VLM_MODEL", "qwen-vl-max"),
+        base_url=os.getenv("FORMA_BASE_URL"),
+        auto_threshold=int(os.getenv("AUTO_THRESHOLD", 200)),
     )
 
 

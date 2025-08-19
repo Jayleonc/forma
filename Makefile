@@ -84,7 +84,27 @@ doctor:
 	echo "=== venv pip list (top 40) ==="; \
 	if [ -d "$(VENV)" ]; then . $(VENV)/bin/activate; pip list | head -n 40; else echo "no $(VENV) yet"; fi
 
+.PHONY: test
+test:
+	@echo ">> running tests with pytest"
+	@uv run pytest
+
+.PHONY: lint
+lint:
+	@echo ">> linting with ruff"
+	@uv run ruff check .
+
+.PHONY: format
+format:
+	@echo ">> formatting with ruff"
+	@uv run ruff format .
+
+.PHONY: quality
+quality: lint test
+
 .PHONY: clean
 clean:
-	@echo ">> remove $(VENV) (not recommended if你想最大化复用已装包)"
-	@rm -rf $(VENV)
+	@echo ">> removing venv, cache, and build artifacts"
+	@rm -rf $(VENV) .venv .pytest_cache .ruff_cache build dist *.egg-info
+	@find . -type d -name "__pycache__" -exec rm -rf {} +
+	@echo "Clean complete."

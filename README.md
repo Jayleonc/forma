@@ -7,7 +7,7 @@
 ## ✨ 核心功能
 
 - **统一的命令行接口**: 所有操作都通过 `forma convert` 命令完成，清晰易用。
-- **多种处理策略**: 
+- **多种处理策略**:
   - `fast`: 使用本地解析和 OCR，速度快，适用于文本型文档。
   - `deep`: 调用强大的视觉语言模型（VLM），由可定制的提示词驱动，精准处理扫描件、复杂排版和图片内容。
   - `auto`: 智能路由，自动为每个文件选择 `fast` 或 `deep` 策略。
@@ -27,23 +27,31 @@ make deps
 ```
 
 该命令会自动执行以下操作：
+
 1. 创建 `.venv` 虚拟环境。
-2. 根据 `pyproject.toml` 生成 `uv.lock` 锁文件。
-3.严格按照锁文件安装所有依赖，确保环境一致性。
+2. 根据 `pyproject.toml` 生成 `uv.lock` 锁文件。 3.严格按照锁文件安装所有依赖，确保环境一致性。
 
-#### 系统依赖
+#### 系统依赖 (可选)
 
-为了完整支持所有功能，特别是 `.pptx` 文件的深度解析，您需要在系统中安装 `LibreOffice`：
+**`LibreOffice` (可选，用于增强 PPTX 解析)**
 
-```bash
-# macOS
-brew install --cask libreoffice
+`forma` 可以不依赖任何外部软件运行。但为了解锁对 `.pptx` 文件中复杂幻灯片（如图表、纯图片页面）的完整深度解析功能，建议您安装 `LibreOffice`。
 
-# Ubuntu/Debian
-sudo apt-get install libreoffice
-```
+- **如果已安装 `LibreOffice`**: `forma` 会自动检测并使用它来转换复杂幻灯片，以获得最精准的分析结果。
+- **如果未安装 `LibreOffice`**: `forma` 仍然可以正常处理所有文件的文本内容。对于 PPTX 中的复杂幻灯片，它将跳过深度解析，并在输出的 Markdown 文件中插入一条提示信息，不会因此中断或报错。
 
-`forma` 会通过命令行调用 `libreoffice` 来实现 PPTX 到 PDF 的转换。
+**安装方法:**
+
+- **macOS (使用 Homebrew):**
+
+  ```bash
+  brew install --cask libreoffice
+  ```
+
+- **Linux (Ubuntu/Debian):**
+  ```bash
+  sudo apt-get update && sudo apt-get install -y libreoffice
+  ```
 
 ### 2. 配置 API 密钥
 
@@ -64,19 +72,24 @@ forma convert "./data/pdfs/沐曦招股书.pdf" -o "./output" -s fast
 # 使用 deep 策略转换一张图片
 forma convert "./data/image/1.png" -o "./output" -s deep
 
-# 使用 auto 策略递归处理整个文件夹
-forma convert "./data" -o "./output" -s auto
+# 使用 auto 策略递归处理整个文件夹 (默认策略)
+forma convert "./data" -o "./output"
+
+# 使用自定义提示词进行深度分析
+forma convert "./data/image/1.png" -o "./output" -s deep -p "technical_diagram_analysis"
 ```
 
 **参数说明:**
+
 - `INPUTS...`: 一个或多个输入文件或文件夹的路径。
 - `-o, --output`: 用于保存输出文件的目录。
 - `-s, --strategy`: 转换策略，可选值为 `auto`, `fast`, `deep` (默认为 `auto`)。
+- `-p, --prompt`: 指定 `deep` 或 `auto` 策略要使用的提示词名称 (默认为 `default_image_description`)。
 - `--recursive / --no-recursive`: 是否递归处理子目录 (默认为 `True`)。
 
 ## 🛠️ 架构概览
 
-重构后的 `forma` 采用分层、模块化的架构：
+`forma` 采用分层、模块化的架构：
 
 ```
 . (项目根目录)
@@ -90,9 +103,15 @@ forma convert "./data" -o "./output" -s auto
     ├── utils/            # 通用工具模块
     └── core/
         ├── __init__.py
-        ├── processors.py # 各文件类型的处理器
         ├── prompt_manager.py # 提示词管理器
-        └── vlm.py          # 视觉语言模型 (VLM) 抽象层
+        ├── vlm.py          # 视觉语言模型 (VLM) 抽象层
+        └── processors/     # 各文件类型的处理器包
+            ├── __init__.py
+            ├── base.py
+            ├── docx.py
+            ├── image.py
+            ├── pdf.py
+            └── pptx.py
 ```
 
 - **`prompts.yaml`**: 定义 `deep` 策略使用的所有提示词，易于修改和扩展。
@@ -104,21 +123,24 @@ forma convert "./data" -o "./output" -s auto
 
 ## 💡 工作原理
 
-1.  **`fast` 策略**: 
+1.  **`fast` 策略**:
+
     - **PDF**: 使用 `pymupdf` 提取文本和图片。对于纯文本 PDF，直接提取；对于扫描件，提取图片后交由 OCR 处理。
     - **DOCX**: 采用混合策略以最大化保留表格等格式。
       1. **优先使用 `mammoth`**：将 DOCX 转换为 HTML，再转换为 Markdown，能较好地还原表格、列表和格式。
       2. **回退至 `python-docx`**：如果前一步失败，则启用基于 `python-docx` 的备用方案，逐一解析段落和表格，确保内容不丢失。
     - **Image**: 使用 `paddleocr` 进行本地 OCR。
-    - **PPTX**: 采用智能的**混合策略**，对每一页幻灯片进行独立分析：
-      1. **启发式判断**: 遍历每一页幻灯片，通过计算文本量来判断其是“内容页”还是“复杂页”（如图表、纯图页）。
-      2. **内容页处理 (Fast Path)**: 对于文本内容充足的页面，直接使用 `python-pptx` 提取文本，并对页内图片进行 OCR。
-      3. **复杂页处理 (Deep Path)**: 对于文本量极少的页面，自动调用深度解析流程：
-         - 使用 **`LibreOffice`** 将PPTX转换为PDF。
-         - 从PDF中精确提取该复杂页为一张图片。
+    - **PPTX**: 采用更智能的**混合策略**，对每一页幻灯片进行独立分析：
+      1. **智能决策**: 遍历每一页幻灯片，通过分析其内容构成来判断其是“内容页”还是“复杂页”。
+         - **优先识别复杂对象**: 如果幻灯片包含 **图表 (Chart)**、**SmartArt** 或 **表格 (Table)**，则立即判定为“复杂页”。
+         - **分析图文关系**: 如果页面主要是图片，文字极少，也判定为“复杂页”。
+      2. **内容页处理 (Fast Path)**: 对于其他所有页面（主要是文本密集型），直接使用 `python-pptx` 提取文本，并对页内图片进行 OCR。
+      3. **复杂页处理 (Deep Path)**: 对于被判定为“复杂页”的幻灯片，自动调用深度解析流程：
+         - 使用 **`LibreOffice`** (如果可用) 将其渲染为一张高清图片。
          - 将此图片交由 **VLM** 进行视觉理解。
 
-2.  **`deep` 策略**: 
+2.  **`deep` 策略**:
+
     - 将文档页面或图片发送给视觉语言模型（如 `qwen-vl-max`）。
     - 调用过程由 `prompts.yaml` 文件驱动。它会加载一个具名 prompt（默认为 `default_image_description`），该 prompt 包含精心设计的 `system` 和 `user` 指令，引导模型生成高质量的 Markdown 文本。
 
@@ -155,4 +177,14 @@ prompts:
 ### 如何定制
 
 - **修改现有提示**: 直接编辑 `prompts.yaml` 中 `user` 或 `system` 的内容，即可改变模型的行为，无需修改任何 Python 代码。
-- **添加新提示**: 你可以按照格式添加新的具名提示（如 `my_custom_prompt`），并在代码中（未来可能通过命令行参数）调用它，以适应特定的文档处理需求。
+- **添加新提示**: 你可以按照格式添加新的具名提示（如 `my_custom_prompt`），然后通过 `-p` 或 `--prompt` 命令行参数来调用它，以适应特定的文档处理需求。
+
+## 🧑‍💻 开发与测试
+
+项目使用 `pytest` 进行测试。运行以下命令以执行完整的测试套件：
+
+```bash
+make test
+```
+
+这会运行 `tests/` 目录下的所有测试用例，并生成覆盖率报告。
