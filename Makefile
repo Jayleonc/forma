@@ -36,6 +36,8 @@ sync:
 # 一键：先 lock 再 sync（默认推荐用这个）
 .PHONY: deps
 deps: venv lock sync
+	
+
 
 # ------------- 依赖变更 -------------
 # 用法：

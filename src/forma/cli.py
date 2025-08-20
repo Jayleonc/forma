@@ -9,7 +9,7 @@ import typer
 from rich.console import Console
 
 from .workflows.conversion import run_conversion
-from .types import Strategy
+from .custom_types import Strategy
 
 app = typer.Typer(
     name="forma",
@@ -50,6 +50,12 @@ def convert(
         "-p",
         help="要使用的 VLM Prompt 名称。",
     ),
+    output_name: str = typer.Option(
+        None,
+        "--output-name",
+        "-n",
+        help="输出文件的名称（不含扩展名）。如果处理多个文件，此选项将被忽略。",
+    ),
 ) -> None:
     """转换文档 (PDF, DOCX, 图片) 为 Markdown。
 
@@ -69,6 +75,7 @@ def convert(
             strategy=strategy,
             recursive=recursive,
             prompt_name=prompt_name,
+            output_name=output_name,
         )
         console.print("\n[bold green]✔ 转换完成.[/]")
     except Exception as e:
@@ -78,7 +85,7 @@ def convert(
 
 
 @app.command(
-    "generate-qa", help="从 Markdown 文件生成结构化的问答对 (FAQ) CSV 文件。"
+    "qa", help="从 Markdown 文件生成结构化的问答对 (FAQ) CSV 文件。"
 )
 def generate_qa(
     input_path: Path = typer.Argument(

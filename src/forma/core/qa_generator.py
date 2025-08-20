@@ -6,24 +6,32 @@ from typing import Any, Dict, List
 import json
 
 import numpy as np
-from langchain.text_splitter import MarkdownTextSplitter
+# LangChain output parsing
+from langchain.output_parsers import PydanticOutputParser, OutputFixingParser
+from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from sentence_transformers import SentenceTransformer
+from sklearn.cluster import DBSCAN
 
-from ..config import get_vlm_config
+from ..config import get_openai_llm_config
 from .prompt_manager import PromptManager
 from ..utils.device import DEVICE
+from .schemas import RawQAList, CategoryList, SynthQA
 
 
 class QAGenerator:
     """Encapsulates the multi-stage QA generation workflow."""
 
     def __init__(
-        self,
-        prompt_manager: PromptManager | None = None,
-        client: ChatOpenAI | None = None,
+            self,
+            prompt_manager: PromptManager | None = None,
+            client: ChatOpenAI | None = None,
     ) -> None:
-        cfg = get_vlm_config()
+        cfg = get_openai_llm_config()
+
+        print('base_url', cfg.base_url, 'model', cfg.model)
+
         self.client = client or ChatOpenAI(
             model=cfg.model, api_key=cfg.api_key, base_url=cfg.base_url
         )
@@ -40,123 +48,124 @@ class QAGenerator:
 
     def run_generation_stage(self, md_content: str) -> List[Dict[str, str]]:
         """Generate raw QA pairs from markdown content."""
-
-        splitter = MarkdownTextSplitter()
-        chunks = splitter.split_text(md_content)
         template = self.prompt_manager.get_prompt("qa_generation")
-        results: List[Dict[str, str]] = []
-        for chunk in chunks:
-            prompt = {
-                "system": template.get("system"),
-                "user": template.get("user", "").replace("{context}", chunk),
-            }
-            response = self._invoke(prompt)
-            try:
-                data = json.loads(response)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(data, list):
-                for item in data:
-                    if (
-                        isinstance(item, dict)
-                        and item.get("question")
-                        and item.get("answer")
-                    ):
-                        results.append(
-                            {
-                                "question": item["question"],
-                                "answer": item["answer"],
-                            }
-                        )
-        return results
+        base_parser = PydanticOutputParser(pydantic_object=RawQAList)
+        fixing_parser = OutputFixingParser.from_llm(
+            llm=self.client, parser=base_parser)
+
+        prompt_template = ChatPromptTemplate.from_messages([
+            SystemMessage(content=template.get("system", "")),
+            HumanMessagePromptTemplate.from_template(
+                template.get("user", "") + "\n{format_instructions}"
+            )
+        ])
+
+        chain = prompt_template | self.client | fixing_parser
+
+        try:
+            # For debugging: check what variables the prompt template expects
+            # print("Prompt expects:", prompt_template.input_variables)
+
+            response_obj = chain.invoke({
+                "context": md_content,
+                "format_instructions": base_parser.get_format_instructions()
+            })
+            if response_obj and isinstance(response_obj, RawQAList):
+                return [qa.model_dump() for qa in response_obj.root]
+            return []
+        except Exception as e:
+            print(f"Generation parse error: {e}")
+            return []
 
     def run_categorization_stage(self, questions: List[str]) -> List[str]:
         """Derive a global list of categories from questions."""
-
         template = self.prompt_manager.get_prompt("category_generation")
-        question_list = "\n".join(questions)
-        prompt = {
-            "system": template.get("system"),
-            "user": template.get("user", "").replace("{question_list}", question_list),
-        }
-        response = self._invoke(prompt)
+        base_parser = PydanticOutputParser(pydantic_object=CategoryList)
+        fixing_parser = OutputFixingParser.from_llm(llm=self.client, parser=base_parser)
+
+        prompt_template = ChatPromptTemplate.from_messages([
+            SystemMessage(content=template.get("system", "")),
+            HumanMessagePromptTemplate.from_template(
+                template.get("user", "") + "\n{format_instructions}"
+            )
+        ])
+
+        chain = prompt_template | self.client | fixing_parser
+
         try:
-            data = json.loads(response)
-        except json.JSONDecodeError:
+            question_list_str = "\n".join(questions)
+            response_obj = chain.invoke({
+                "question_list": question_list_str,
+                "format_instructions": base_parser.get_format_instructions()
+            })
+            if response_obj and isinstance(response_obj, CategoryList):
+                return response_obj.categories
             return []
-        categories = data.get("categories")
-        if isinstance(categories, list):
-            return [str(c) for c in categories if c]
-        return []
+        except Exception as e:
+            print(f"Category parse error: {e}")
+            return []
 
     def run_synthesis_stage(
-        self, raw_qas: List[Dict[str, str]], categories: List[str]
+            self, raw_qas: List[Dict[str, str]], categories: List[str]
     ) -> List[Dict[str, str]]:
         """Cluster, synthesise and categorise QA pairs."""
-
         if not raw_qas:
             return []
 
-        # --- 向量化 --- #
-        # 1. 加载一个高效的句子嵌入模型。
-        # sentence-transformers 框架极大地简化了文本向量化的过程。
-        # 'all-MiniLM-L6-v2' 是一个轻量且性能优秀的多语言模型。
-        from sentence_transformers import SentenceTransformer
-
-        model = SentenceTransformer("all-MiniLM-L6-v2", device=DEVICE)
-
-        # 2. 将所有原始问题的文本转换为向量（Embeddings）。
-        # 这些向量是问题在多维空间中的数学表示，语义相近的问题，其向量也相近。
-        questions = [qa["question"] for qa in raw_qas]
-        embeddings = model.encode(questions)
-
-        # --- 语义聚类 --- #
-        # 3. 使用DBSCAN算法进行语义聚类。
-        # DBSCAN的优势在于无需预先指定聚类的数量，它可以根据数据本身的分布自动发现簇。
-        # 它还能识别出无法归入任何簇的“噪音点”，帮助我们过滤低质量或孤立的问题。
-        # eps: 定义了邻域的半径，metric='cosine'表示使用余弦距离。
-        # min_samples: 定义了形成一个核心点所需的最小样本数。
-        from sklearn.cluster import DBSCAN
-        dbscan = DBSCAN(eps=0.4, min_samples=1, metric='cosine')
-        labels = dbscan.fit_predict(embeddings)
-
-        # 4. 将问答对按照聚类结果进行分组。
-        # 标签为 -1 的是噪音点，我们将其忽略。
-        clusters: Dict[int, List[Dict[str, str]]] = {}
-        for label, qa in zip(labels, raw_qas):
-            if label != -1:
-                clusters.setdefault(int(label), []).append(qa)
-
         template = self.prompt_manager.get_prompt("qa_synthesis")
-        category_list = json.dumps(categories, ensure_ascii=False)
-        results: List[Dict[str, str]] = []
-        for group in clusters.values():
-            qa_cluster = json.dumps(group, ensure_ascii=False)
-            prompt = {
-                "system": template.get("system"),
-                "user": template.get("user", "")
-                .replace("{category_list}", category_list)
-                .replace("{qa_cluster}", qa_cluster),
-            }
-            response = self._invoke(prompt)
-            try:
-                data = json.loads(response)
-            except json.JSONDecodeError:
+        base_parser = PydanticOutputParser(pydantic_object=SynthQA)
+        fixing_parser = OutputFixingParser.from_llm(llm=self.client, parser=base_parser)
+
+        prompt_template = ChatPromptTemplate.from_messages([
+            SystemMessage(content=template.get("system", "")),
+            HumanMessagePromptTemplate.from_template(
+                template.get("user", "") + "\n{format_instructions}"
+            )
+        ])
+
+        chain = prompt_template | self.client | fixing_parser
+
+        question_embeddings = self._get_embeddings([qa["question"] for qa in raw_qas])
+        clusters = self._cluster_embeddings(question_embeddings)
+
+        synthesised_qas = []
+        category_list_str = "\n".join(categories)
+
+        for i, cluster_indices in enumerate(clusters):
+            if not cluster_indices:
                 continue
-            if (
-                isinstance(data, dict)
-                and data.get("question")
-                and data.get("answer")
-                and data.get("category")
-            ):
-                results.append(
-                    {
-                        "question": data["question"],
-                        "answer": data["answer"],
-                        "category": data["category"],
-                    }
-                )
-        return results
+            cluster_qa_pairs = [raw_qas[j] for j in cluster_indices]
+            qa_cluster_str = json.dumps(cluster_qa_pairs, ensure_ascii=False, indent=2)
+
+            try:
+                response_obj = chain.invoke({
+                    "qa_cluster": qa_cluster_str,
+                    "category_list": category_list_str,
+                    "format_instructions": base_parser.get_format_instructions(),
+                })
+                if response_obj and isinstance(response_obj, SynthQA) and response_obj.question and response_obj.answer:
+                    synthesised_qas.append(response_obj.model_dump())
+            except Exception as e:
+                print(f"Synthesis parse error for cluster {i}: {e}")
+
+        return synthesised_qas
+
+    def _get_embeddings(self, texts: List[str]) -> np.ndarray:
+        model = SentenceTransformer("shibing624/text2vec-base-chinese", device=DEVICE)
+        return model.encode(texts)
+
+    def _cluster_embeddings(self, embeddings: np.ndarray) -> List[List[int]]:
+        dbscan = DBSCAN(eps=0.5, min_samples=2, metric="cosine")
+        cluster_labels = dbscan.fit_predict(embeddings)
+
+        # Group indices by cluster label
+        num_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
+        clusters = [[] for _ in range(num_clusters)]
+        for i, label in enumerate(cluster_labels):
+            if label != -1:
+                clusters[label].append(i)
+
+        return clusters
 
 
 __all__ = ["QAGenerator"]

@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
-from ..types import Strategy
+from ..custom_types import Strategy
 from ..core.processors import (
     DocxProcessor,
     ImageProcessor,
@@ -36,6 +36,7 @@ def run_conversion(
     strategy: Strategy,
     recursive: bool,
     prompt_name: str = "default_image_description",
+    output_name: str | None = None,
 ) -> None:
     """Entry point invoked by the CLI.
 
@@ -56,8 +57,19 @@ def run_conversion(
     files = _discover_files(inputs, recursive)
     output_dir.mkdir(parents=True, exist_ok=True)
     vlm_parser = VlmParser() if strategy != Strategy.FAST else None
+    # If a custom output name is provided and there's only one file, use it.
+    # Otherwise, this parameter is ignored.
+    effective_output_name = output_name if len(files) == 1 else None
+
     for path in files:
-        _process_single_file(path, output_dir, strategy, vlm_parser, prompt_name)
+        _process_single_file(
+            path,
+            output_dir,
+            strategy,
+            vlm_parser,
+            prompt_name,
+            effective_output_name,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -96,12 +108,14 @@ def _process_single_file(
     strategy: Strategy,
     vlm_parser: VlmParser | None = None,
     prompt_name: str = "default_image_description",
+    output_name: str | None = None,
 ) -> None:
     processor = _select_processor(path)
     if processor is None:
         return
 
-    output_path = output_dir / f"{path.stem}.md"
+    stem = output_name if output_name else path.stem
+    output_path = output_dir / f"{stem}.md"
 
     # For AUTO mode on images, prefer deep strategy directly.
     if strategy == Strategy.AUTO and isinstance(processor, ImageProcessor):
