@@ -14,7 +14,7 @@ from langchain_openai import ChatOpenAI
 from sentence_transformers import SentenceTransformer
 from sklearn.cluster import DBSCAN
 
-from ..config import get_openai_llm_config
+from ..config import get_llm_config
 from .prompt_manager import PromptManager
 from ..utils.device import DEVICE
 from .schemas import RawQAList, CategoryList, SynthQA
@@ -28,7 +28,7 @@ class QAGenerator:
             prompt_manager: PromptManager | None = None,
             client: ChatOpenAI | None = None,
     ) -> None:
-        cfg = get_openai_llm_config()
+        cfg = get_llm_config()
 
         print('base_url', cfg.base_url, 'model', cfg.model)
 
@@ -81,7 +81,8 @@ class QAGenerator:
         """Derive a global list of categories from questions."""
         template = self.prompt_manager.get_prompt("category_generation")
         base_parser = PydanticOutputParser(pydantic_object=CategoryList)
-        fixing_parser = OutputFixingParser.from_llm(llm=self.client, parser=base_parser)
+        fixing_parser = OutputFixingParser.from_llm(
+            llm=self.client, parser=base_parser)
 
         prompt_template = ChatPromptTemplate.from_messages([
             SystemMessage(content=template.get("system", "")),
@@ -114,7 +115,8 @@ class QAGenerator:
 
         template = self.prompt_manager.get_prompt("qa_synthesis")
         base_parser = PydanticOutputParser(pydantic_object=SynthQA)
-        fixing_parser = OutputFixingParser.from_llm(llm=self.client, parser=base_parser)
+        fixing_parser = OutputFixingParser.from_llm(
+            llm=self.client, parser=base_parser)
 
         prompt_template = ChatPromptTemplate.from_messages([
             SystemMessage(content=template.get("system", "")),
@@ -125,7 +127,8 @@ class QAGenerator:
 
         chain = prompt_template | self.client | fixing_parser
 
-        question_embeddings = self._get_embeddings([qa["question"] for qa in raw_qas])
+        question_embeddings = self._get_embeddings(
+            [qa["question"] for qa in raw_qas])
         clusters = self._cluster_embeddings(question_embeddings)
 
         synthesised_qas = []
@@ -135,7 +138,10 @@ class QAGenerator:
             if not cluster_indices:
                 continue
             cluster_qa_pairs = [raw_qas[j] for j in cluster_indices]
-            qa_cluster_str = json.dumps(cluster_qa_pairs, ensure_ascii=False, indent=2)
+            qa_cluster_str = json.dumps(
+                cluster_qa_pairs, ensure_ascii=False, indent=2)
+
+            print(qa_cluster_str)
 
             try:
                 response_obj = chain.invoke({
@@ -151,19 +157,32 @@ class QAGenerator:
         return synthesised_qas
 
     def _get_embeddings(self, texts: List[str]) -> np.ndarray:
-        model = SentenceTransformer("shibing624/text2vec-base-chinese", device=DEVICE)
+        model = SentenceTransformer(
+            "shibing624/text2vec-base-chinese", device=DEVICE)
         return model.encode(texts)
 
     def _cluster_embeddings(self, embeddings: np.ndarray) -> List[List[int]]:
-        dbscan = DBSCAN(eps=0.5, min_samples=2, metric="cosine")
+        # eps (epsilon): 定义邻域的距离阈值。在 'cosine' 度量下，距离 = 1 - 相似度。
+        # eps=0.3 意味着只有当两个问题的余弦相似度 > 0.7 时，它们才可能被聚为一类。
+        # 这个值越小，聚类标准越严格，形成的簇会更小、更多。
+        # min_samples: 定义一个点成为核心点所需的最小邻域样本数。
+        # min_samples=2 是最小值，意味着只要有两个问题足够相似，就可以形成一个独立的簇。
+        dbscan = DBSCAN(eps=0.3, min_samples=1, metric="cosine")
         cluster_labels = dbscan.fit_predict(embeddings)
 
         # Group indices by cluster label
-        num_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
-        clusters = [[] for _ in range(num_clusters)]
-        for i, label in enumerate(cluster_labels):
-            if label != -1:
-                clusters[label].append(i)
+        unique_labels = set(cluster_labels)
+        clusters: List[List[int]] = []
+
+        for label in unique_labels:
+            if label == -1:
+                continue  # Handle outliers separately
+            clusters.append(
+                [i for i, l in enumerate(cluster_labels) if l == label])
+
+        # Treat each outlier as a separate cluster
+        outlier_indices = [i for i, l in enumerate(cluster_labels) if l == -1]
+        clusters.extend([[i] for i in outlier_indices])
 
         return clusters
 
