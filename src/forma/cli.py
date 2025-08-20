@@ -77,5 +77,38 @@ def convert(
         raise typer.Exit(code=1)
 
 
+@app.command(
+    "generate-qa", help="从 Markdown 文件生成结构化的问答对 (FAQ) CSV 文件。"
+)
+def generate_qa(
+    input_path: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+        help="输入的 Markdown 文件路径。",
+    ),
+    output_dir: Path = typer.Option(
+        ...,
+        "-o",
+        "--output",
+        help="用于保存输出 CSV 文件的目录。",
+        file_okay=False,
+        dir_okay=True,
+        writable=True,
+        resolve_path=True,
+    ),
+) -> None:
+    """接收一个Markdown文件，通过三阶段LLM流水线生成高质量的问答对，并保存为CSV文件。"""
+
+    from forma.controller import Controller
+
+    controller = Controller()
+    controller.generate_qa_pipeline(input_path, output_dir)
+    console.print(f"✅ QA 生成完成，结果已保存至 {output_dir}")
+
+
 if __name__ == "__main__":
     app()

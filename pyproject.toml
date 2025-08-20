@@ -29,6 +29,9 @@ dependencies = [
   "python-pptx",
   "pyyaml",
   "python-dotenv",
+  "pandas",
+  "scikit-learn",
+  "sentence-transformers",
 ]
 
 [project.optional-dependencies]
