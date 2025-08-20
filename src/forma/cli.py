@@ -8,7 +8,7 @@ from typing import List
 import typer
 from rich.console import Console
 
-from .controller import run_conversion
+from .workflows.conversion import run_conversion
 from .types import Strategy
 
 app = typer.Typer(
@@ -103,10 +103,9 @@ def generate_qa(
 ) -> None:
     """接收一个Markdown文件，通过三阶段LLM流水线生成高质量的问答对，并保存为CSV文件。"""
 
-    from forma.controller import Controller
+    from forma.workflows.qa_pipeline import generate_qa_pipeline
 
-    controller = Controller()
-    controller.generate_qa_pipeline(input_path, output_dir)
+    generate_qa_pipeline(input_path, output_dir)
     console.print(f"✅ QA 生成完成，结果已保存至 {output_dir}")
 
 

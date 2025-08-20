@@ -9,7 +9,6 @@ authors = [{ name = "Jayleonc", email = "jayleonc@gmail.com" }]
 dependencies = [
   "typer",
   "paddleocr",
-  "paddlepaddle",
   "pillow",
   "tqdm",
   "rich",
@@ -40,6 +39,14 @@ dev = [
   "pytest-cov>=5.0.0",
   "ipython>=8.0.0",
   "ruff", 
+]
+gpu = [
+    "paddlepaddle-gpu",
+    "torch",
+]
+cpu = [
+    "paddlepaddle",
+    "torch",
 ]
 
 [build-system]

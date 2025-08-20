@@ -5,12 +5,14 @@ from __future__ import annotations
 from typing import Any, Dict, List
 import json
 
+import numpy as np
 from langchain.text_splitter import MarkdownTextSplitter
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from ..config import get_vlm_config
 from .prompt_manager import PromptManager
+from ..utils.device import DEVICE
 
 
 class QAGenerator:
@@ -94,18 +96,36 @@ class QAGenerator:
 
         if not raw_qas:
             return []
-        questions = [qa["question"] for qa in raw_qas]
-        from sentence_transformers import SentenceTransformer
-        from sklearn.cluster import KMeans
 
-        model = SentenceTransformer("all-MiniLM-L6-v2")
+        # --- 向量化 --- #
+        # 1. 加载一个高效的句子嵌入模型。
+        # sentence-transformers 框架极大地简化了文本向量化的过程。
+        # 'all-MiniLM-L6-v2' 是一个轻量且性能优秀的多语言模型。
+        from sentence_transformers import SentenceTransformer
+
+        model = SentenceTransformer("all-MiniLM-L6-v2", device=DEVICE)
+
+        # 2. 将所有原始问题的文本转换为向量（Embeddings）。
+        # 这些向量是问题在多维空间中的数学表示，语义相近的问题，其向量也相近。
+        questions = [qa["question"] for qa in raw_qas]
         embeddings = model.encode(questions)
-        n_clusters = min(len(raw_qas), max(1, len(categories) or 1))
-        kmeans = KMeans(n_clusters=n_clusters, n_init=10, random_state=0)
-        labels = kmeans.fit_predict(embeddings)
+
+        # --- 语义聚类 --- #
+        # 3. 使用DBSCAN算法进行语义聚类。
+        # DBSCAN的优势在于无需预先指定聚类的数量，它可以根据数据本身的分布自动发现簇。
+        # 它还能识别出无法归入任何簇的“噪音点”，帮助我们过滤低质量或孤立的问题。
+        # eps: 定义了邻域的半径，metric='cosine'表示使用余弦距离。
+        # min_samples: 定义了形成一个核心点所需的最小样本数。
+        from sklearn.cluster import DBSCAN
+        dbscan = DBSCAN(eps=0.4, min_samples=1, metric='cosine')
+        labels = dbscan.fit_predict(embeddings)
+
+        # 4. 将问答对按照聚类结果进行分组。
+        # 标签为 -1 的是噪音点，我们将其忽略。
         clusters: Dict[int, List[Dict[str, str]]] = {}
         for label, qa in zip(labels, raw_qas):
-            clusters.setdefault(int(label), []).append(qa)
+            if label != -1:
+                clusters.setdefault(int(label), []).append(qa)
 
         template = self.prompt_manager.get_prompt("qa_synthesis")
         category_list = json.dumps(categories, ensure_ascii=False)

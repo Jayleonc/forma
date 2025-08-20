@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, List, Optional
 import tempfile
+from ..utils.device import DEVICE
 
 # NOTE: PyMuPDF (fitz) is only needed for PDF OCR and imported lazily.
 
@@ -55,7 +56,7 @@ def _get_ocr_engine() -> Any:
             from paddleocr import PaddleOCR  # imported lazily for optional dependency
 
             # Use default OCR pipeline for broad compatibility across versions
-            _OCR_ENGINE = PaddleOCR(show_log=False)
+            _OCR_ENGINE = PaddleOCR(show_log=False, use_gpu=(DEVICE == "cuda"))
         except Exception:
             # Fallback to RapidOCR (onnxruntime) if PaddleOCR (and deps like cv2) are unavailable.
             class _RapidOCREngine:
@@ -90,7 +91,7 @@ def _get_structure_engine() -> Any:
             _STRUCTURE_ENGINE = None
             return _STRUCTURE_ENGINE
         _STRUCTURE_ENGINE = PPStructure(
-            layout=True, table=True, ocr=True, lang="ch", show_log=False
+            layout=True, table=True, ocr=True, lang="ch", show_log=False, use_gpu=(DEVICE == "cuda")
         )
     return _STRUCTURE_ENGINE
 
@@ -120,12 +121,14 @@ def parse_image_to_markdown(image_path: str) -> str:
         btype = None
         if isinstance(block, dict):
             btype = block.get("type") or (
-                isinstance(block.get("layout"), dict) and block["layout"].get("type")
+                isinstance(block.get("layout"),
+                           dict) and block["layout"].get("type")
             )
         text = "\n".join(_extract_lines(block)).strip()
         if not text and isinstance(block, dict):
             # Table HTML support if provided by PP-Structure
-            res = block.get("res") if isinstance(block.get("res"), dict) else None
+            res = block.get("res") if isinstance(
+                block.get("res"), dict) else None
             html = res.get("html") if res else None
             if html:
                 md_parts.append(html)
@@ -155,7 +158,8 @@ def parse_image_to_markdown(image_path: str) -> str:
                 md_parts.append("\n".join(f"* {t}" for t in items))
         elif btype == "table":
             # Prefer structured HTML if available; otherwise keep plain text
-            res = block.get("res") if isinstance(block.get("res"), dict) else None
+            res = block.get("res") if isinstance(
+                block.get("res"), dict) else None
             html = res.get("html") if res else None
             md_parts.append(html if html else text)
         else:

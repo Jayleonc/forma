@@ -8,6 +8,14 @@ LOCK   ?= uv.lock
 REQEXP ?= requirements.lock.txt
 WHEEL_DIR ?= vendor/wheels
 
+# Detect OS for platform-specific flags
+UNAME_S := $(shell uname -s)
+UV_PLATFORM_FLAGS :=
+ifeq ($(UNAME_S),Linux)
+	# For Linux, add PyTorch's CUDA 12.1 index. Adjust cuXXX as needed.
+	UV_PLATFORM_FLAGS += --extra-index-url https://download.pytorch.org/whl/cu121
+endif
+
 # ------------- 基础 -------------
 .PHONY: venv
 venv:
@@ -18,12 +26,12 @@ venv:
 .PHONY: lock
 lock:
 	@echo ">> uv lock (resolve deps into $(LOCK))"
-	@uv lock
+	@uv lock $(UV_PLATFORM_FLAGS)
 
 .PHONY: sync
 sync:
 	@echo ">> uv sync --frozen (strictly install from $(LOCK))"
-	@uv sync --frozen
+	@uv sync --frozen $(UV_PLATFORM_FLAGS)
 
 # 一键：先 lock 再 sync（默认推荐用这个）
 .PHONY: deps
