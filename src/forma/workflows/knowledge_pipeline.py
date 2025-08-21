@@ -23,7 +23,7 @@ console = Console()
 def run_knowledge_pipeline(
     input_path: Path, output_dir: Path, export_csv: bool = False
 ) -> None:
-    """Run the four-stage knowledge building pipeline."""
+    """Run the three-stage knowledge building pipeline."""
     md_content = input_path.read_text(encoding="utf-8")
 
     console.rule("[bold cyan]Stage 1: Chunk Markdown[/bold cyan]", style="cyan")
@@ -55,30 +55,13 @@ def run_knowledge_pipeline(
         )
     )
 
-    console.rule("[bold cyan]Stage 3: Discover Categories[/bold cyan]", style="cyan")
-    categories = builder._discover_global_categories(enriched_chunks)
-    console.print(
-        Panel(
-            json.dumps(categories, indent=2, ensure_ascii=False),
-            title="[bold green]Categories[/bold green]",
-            border_style="green",
-        )
+    console.rule(
+        "[bold cyan]Stage 3: Synthesize Global Knowledge[/bold cyan]",
+        style="cyan",
     )
-
-    category_to_chunks: Dict[str, List[EnrichedChunk]] = {}
-    for item in categories:
-        category = item.get("category")
-        chunk_ids = item.get("chunk_ids", [])
-        related = [ec for ec in enriched_chunks if ec.chunk_id in chunk_ids]
-        if category:
-            category_to_chunks[category] = related
-
-    console.rule("[bold cyan]Stage 4: Fuse Knowledge by Category[/bold cyan]", style="cyan")
-    knowledge_units: List[AuthoritativeKnowledgeUnit] = []
-    for category, related in category_to_chunks.items():
-        knowledge_units.append(
-            builder._fuse_knowledge_by_category(category, related)
-        )
+    knowledge_units: List[AuthoritativeKnowledgeUnit] = builder._synthesize_global_knowledge(
+        enriched_chunks
+    )
     console.print(
         Panel(
             json.dumps([ku.model_dump() for ku in knowledge_units], indent=2, ensure_ascii=False),
