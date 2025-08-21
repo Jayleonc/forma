@@ -21,7 +21,7 @@ from .models import (
 
 
 class KnowledgeBuilder:
-    """Encapsulates the multi-stage knowledge building workflow."""
+    """封装多阶段的知识构建工作流。"""
 
     def __init__(
         self,
@@ -44,10 +44,12 @@ class KnowledgeBuilder:
         return getattr(result, "content", "") or ""
 
     def _distill_knowledge_from_chunk(self, chunk: Chunk) -> EnrichedChunk:
-        """Distil knowledge from a single chunk."""
-        template = self.prompt_manager.get_prompt("knowledge_distillation_prompt")
+        """从单个文本块中提炼知识。"""
+        template = self.prompt_manager.get_prompt(
+            "knowledge_distillation_prompt")
         base_parser = PydanticOutputParser(pydantic_object=DistilledKnowledge)
-        fixing_parser = OutputFixingParser.from_llm(llm=self.client, parser=base_parser)
+        fixing_parser = OutputFixingParser.from_llm(
+            llm=self.client, parser=base_parser)
 
         prompt_template = ChatPromptTemplate.from_messages(
             [
@@ -71,14 +73,14 @@ class KnowledgeBuilder:
                 summary="", qa_pairs=[], hypothetical_questions=[], entities={}
             )
         except Exception as e:
-            print(f"Knowledge distillation error for chunk {chunk.chunk_id}: {e}")
+            print(f"知识提炼步骤出错 (chunk: {chunk.chunk_id}): {e}")
             knowledge = DistilledKnowledge(
                 summary="", qa_pairs=[], hypothetical_questions=[], entities={}
             )
         return EnrichedChunk(**chunk.model_dump(), knowledge=knowledge)
 
     def _discover_global_themes(self, enriched_chunks: List[EnrichedChunk]) -> List[Dict]:
-        """Discover global themes across enriched chunks."""
+        """从多个富集文本块中发现全局主题。"""
         template = self.prompt_manager.get_prompt("theme_generation_prompt")
         prompt_template = ChatPromptTemplate.from_messages(
             [
@@ -97,20 +99,24 @@ class KnowledgeBuilder:
         ]
         chain = prompt_template | self.client
         try:
-            result = chain.invoke({"enriched_chunks": json.dumps(payload, ensure_ascii=False)})
-            text = getattr(result, "content", "") if hasattr(result, "content") else result
+            result = chain.invoke(
+                {"enriched_chunks": json.dumps(payload, ensure_ascii=False)})
+            text = getattr(result, "content", "") if hasattr(
+                result, "content") else result
             return json.loads(text) if text else []
         except Exception as e:
-            print(f"Theme discovery error: {e}")
+            print(f"主题发现步骤出错: {e}")
             return []
 
     def _fuse_knowledge_by_theme(
         self, theme: str, related_chunks: List[EnrichedChunk]
     ) -> AuthoritativeKnowledgeUnit:
-        """Fuse knowledge for a specific theme into an authoritative unit."""
+        """根据特定主题融合知识，形成权威知识单元。"""
         template = self.prompt_manager.get_prompt("theme_synthesis_prompt")
-        base_parser = PydanticOutputParser(pydantic_object=AuthoritativeKnowledgeUnit)
-        fixing_parser = OutputFixingParser.from_llm(llm=self.client, parser=base_parser)
+        base_parser = PydanticOutputParser(
+            pydantic_object=AuthoritativeKnowledgeUnit)
+        fixing_parser = OutputFixingParser.from_llm(
+            llm=self.client, parser=base_parser)
         prompt_template = ChatPromptTemplate.from_messages(
             [
                 SystemMessage(content=template.get("system", "")),
@@ -141,7 +147,7 @@ class KnowledgeBuilder:
             if isinstance(response, AuthoritativeKnowledgeUnit):
                 return response
         except Exception as e:
-            print(f"Theme synthesis error for theme {theme}: {e}")
+            print(f"主题融合步骤出错 (theme: {theme}): {e}")
         return AuthoritativeKnowledgeUnit(
             theme=theme,
             canonical_question="",
