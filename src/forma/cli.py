@@ -107,12 +107,18 @@ def generate_qa(
         writable=True,
         resolve_path=True,
     ),
+    export_csv: bool = typer.Option(
+        False,
+        "--export-csv",
+        help="Additionally export a flattened CSV file (question, answer, category).",
+        show_default=False,
+    ),
 ) -> None:
     """从Markdown文档构建分层的知识库并保存为JSONL文件。"""
 
     from forma.workflows.knowledge_pipeline import run_knowledge_pipeline
 
-    run_knowledge_pipeline(input_path, output_dir)
+    run_knowledge_pipeline(input_path, output_dir, export_csv=export_csv)
     console.print(f"✅ 知识库构建完成，结果已保存至 {output_dir}")
 
 
