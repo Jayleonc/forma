@@ -17,6 +17,7 @@ from .models import (
     DistilledKnowledge,
     EnrichedChunk,
     AuthoritativeKnowledgeUnit,
+    AuthoritativeKnowledgeList,
 )
 
 
@@ -79,62 +80,19 @@ class KnowledgeBuilder:
             )
         return EnrichedChunk(**chunk.model_dump(), knowledge=knowledge)
 
-    def _discover_global_categories(self, enriched_chunks: List[EnrichedChunk]) -> List[Dict]:
-        """从多个富集文本块中发现全局分类。"""
-        template = self.prompt_manager.get_prompt("category_generation_prompt")
-        prompt_template = ChatPromptTemplate.from_messages(
-            [
-                SystemMessage(content=template.get("system", "")),
-                HumanMessagePromptTemplate.from_template(template.get("user", "")),
-            ]
+    def _synthesize_global_knowledge(
+        self, enriched_chunks: List[EnrichedChunk]
+    ) -> List[AuthoritativeKnowledgeUnit]:
+        """将多个富集文本块直接整合为权威知识单元列表。"""
+        template = self.prompt_manager.get_prompt(
+            "global_knowledge_synthesis_prompt"
         )
-        payload = [
-            {
-                "chunk_id": c.chunk_id,
-                "summary": c.knowledge.summary,
-                "questions": [qa["question"] for qa in c.knowledge.qa_pairs]
-                + c.knowledge.hypothetical_questions,
-            }
-            for c in enriched_chunks
-        ]
-        chain = prompt_template | self.client
-
-        def _safe_json_loads(text: str):
-            """Attempt to parse JSON, stripping code fences or surrounding text."""
-            import re
-            try:
-                return json.loads(text)
-            except json.JSONDecodeError:
-                # Remove common markdown code fences
-                cleaned = re.sub(r"^```[a-zA-Z]*\\n|\\n```$", "", text.strip())
-                try:
-                    return json.loads(cleaned)
-                except json.JSONDecodeError:
-                    # Fallback: try to locate the first JSON array in text
-                    match = re.search(r"\[[\s\S]*\]", text)
-                    if match:
-                        try:
-                            return json.loads(match.group(0))
-                        except json.JSONDecodeError:
-                            pass
-            return []
-
-        try:
-            result = chain.invoke({"enriched_chunks": json.dumps(payload, ensure_ascii=False)})
-            text = getattr(result, "content", "") if hasattr(result, "content") else result
-            return _safe_json_loads(text)
-        except Exception as e:
-            print(f"分类发现步骤出错: {e}")
-            return []
-    def _fuse_knowledge_by_category(
-        self, category: str, related_chunks: List[EnrichedChunk]
-    ) -> AuthoritativeKnowledgeUnit:
-        """根据特定分类融合知识，形成权威知识单元。"""
-        template = self.prompt_manager.get_prompt("category_synthesis_prompt")
         base_parser = PydanticOutputParser(
-            pydantic_object=AuthoritativeKnowledgeUnit)
+            pydantic_object=AuthoritativeKnowledgeList
+        )
         fixing_parser = OutputFixingParser.from_llm(
-            llm=self.client, parser=base_parser)
+            llm=self.client, parser=base_parser
+        )
         prompt_template = ChatPromptTemplate.from_messages(
             [
                 SystemMessage(content=template.get("system", "")),
@@ -152,26 +110,20 @@ class KnowledgeBuilder:
                 "hypothetical_questions": c.knowledge.hypothetical_questions,
                 "entities": c.knowledge.entities,
             }
-            for c in related_chunks
+            for c in enriched_chunks
         ]
         try:
             response = chain.invoke(
                 {
-                    "category": category,
-                    "related_knowledge": json.dumps(payload, ensure_ascii=False),
+                    "enriched_chunks": json.dumps(payload, ensure_ascii=False),
                     "format_instructions": base_parser.get_format_instructions(),
                 }
             )
-            if isinstance(response, AuthoritativeKnowledgeUnit):
-                return response
+            if isinstance(response, AuthoritativeKnowledgeList):
+                return response.__root__
         except Exception as e:
-            print(f"分类融合步骤出错 (category: {category}): {e}")
-        return AuthoritativeKnowledgeUnit(
-            category=category,
-            canonical_question="",
-            canonical_answer="",
-            source_chunks=[c.chunk_id for c in related_chunks],
-        )
+            print(f"全局知识合成步骤出错: {e}")
+        return []
 
 
 __all__ = ["KnowledgeBuilder"]

@@ -36,34 +36,23 @@ prompts:
       {chunk_text}
       ---
 
-  category_generation_prompt:
+  global_knowledge_synthesis_prompt:
     system: >-
-      你是一位知识架构规划专家，负责从多段提炼后的信息中识别精炼的分类标签。
+      你是一位资深技术写作者和知识架构规划专家，擅长整合多来源知识形成权威结论。
     user: >-
-      根据以下已经提炼的知识块（包含摘要和问题），识别核心分类并为每个分类列出相关的 chunk_id。
-      请以 JSON 格式输出: [{"category": "分类", "chunk_ids": ["id1", "id2"]}, ...]
+      现在有若干已经提炼的知识块，请你先识别这些内容所涉及的核心分类，再在每个分类下整合相关知识，生成权威的问答单元列表。输出严格遵循 JSON 格式:
+      [
+        {
+          "category": "分类",
+          "canonical_question": "标准问题",
+          "canonical_answer": "标准答案",
+          "source_chunks": ["chunk_id1", "chunk_id2"],
+          "raw_knowledge_snippets": [{"chunk_id": "id", "summary": "..."}]
+        },
+        ...
+      ]
 
       知识块列表:
       ---
       {enriched_chunks}
-      ---
-
-  category_synthesis_prompt:
-    system: >-
-      你是一位资深技术写作者，擅长整合多来源知识形成权威结论。
-    user: >-
-      现在有一个分类和若干相关的知识块，请综合这些信息，生成一个权威的问答单元。输出 JSON 格式:
-      {
-        "category": "分类",
-        "canonical_question": "标准问题",
-        "canonical_answer": "标准答案",
-        "source_chunks": ["chunk_id1", "chunk_id2"],
-        "raw_knowledge_snippets": [{"chunk_id": "id", "summary": "..."}]
-      }
-
-      分类: {category}
-
-      相关知识:
-      ---
-      {related_knowledge}
       ---

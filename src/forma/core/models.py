@@ -37,9 +37,17 @@ class AuthoritativeKnowledgeUnit(BaseModel):
     raw_knowledge_snippets: Optional[List[Dict[str, Any]]] = None
 
 
+class AuthoritativeKnowledgeList(BaseModel):
+    """Wrapper model for a list of authoritative knowledge units."""
+
+    __root__: List[AuthoritativeKnowledgeUnit]
+
+
 __all__ = [
     "Chunk",
     "DistilledKnowledge",
     "EnrichedChunk",
     "AuthoritativeKnowledgeUnit",
+    "AuthoritativeKnowledgeList",
 ]
+
