@@ -98,12 +98,31 @@ class KnowledgeBuilder:
             for c in enriched_chunks
         ]
         chain = prompt_template | self.client
+
+        def _safe_json_loads(text: str):
+            """Attempt to parse JSON, stripping code fences or surrounding text."""
+            import re
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                # Remove common markdown code fences
+                cleaned = re.sub(r"^```[a-zA-Z]*\\n|\\n```$", "", text.strip())
+                try:
+                    return json.loads(cleaned)
+                except json.JSONDecodeError:
+                    # Fallback: try to locate the first JSON array in text
+                    match = re.search(r"\[[\s\S]*\]", text)
+                    if match:
+                        try:
+                            return json.loads(match.group(0))
+                        except json.JSONDecodeError:
+                            pass
+            return []
+
         try:
-            result = chain.invoke(
-                {"enriched_chunks": json.dumps(payload, ensure_ascii=False)})
-            text = getattr(result, "content", "") if hasattr(
-                result, "content") else result
-            return json.loads(text) if text else []
+            result = chain.invoke({"enriched_chunks": json.dumps(payload, ensure_ascii=False)})
+            text = getattr(result, "content", "") if hasattr(result, "content") else result
+            return _safe_json_loads(text)
         except Exception as e:
             print(f"主题发现步骤出错: {e}")
             return []
