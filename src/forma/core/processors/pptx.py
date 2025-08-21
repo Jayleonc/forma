@@ -97,8 +97,8 @@ class PptxProcessor(Processor):
                         image_count += 1
                     except (RuntimeError, ValueError, FileNotFoundError) as e:
                         slide_markdowns[idx] = (
-                            f"> _[提示] 第 {idx + 1} 页是一张复杂幻灯片，因未检测到 LibreOffice 而跳过深度解析。_\n"
-                            f"> _如需完整内容，请安装 LibreOffice 并确保其在系统路径中。_"
+                            f"> _[提示] 第 {idx + 1} 页是一张复杂幻灯片，深度解析失败：{e}_\n"
+                            f"> _系统已回退并保留可提取的文本/图片。若因未安装 LibreOffice 导致，请安装并确保其在系统路径或 macOS 默认位置。_"
                         )
 
         markdown = "\n\n---\n\n".join(m for m in slide_markdowns if m)
@@ -109,5 +109,6 @@ class PptxProcessor(Processor):
             image_count=image_count,
             low_confidence=text_len == 0,
         )
+
 
 __all__ = ["PptxProcessor"]
