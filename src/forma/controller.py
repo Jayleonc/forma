@@ -9,14 +9,17 @@ from __future__ import annotations
 from pathlib import Path
 
 from .workflows.conversion import run_conversion
-from .workflows.qa_pipeline import generate_qa_pipeline as _generate_qa_pipeline
+from .workflows.knowledge_pipeline import run_knowledge_pipeline as _run_knowledge_pipeline
 
 __all__ = ["run_conversion", "Controller"]
 
 
 class Controller:
-    """Backward-compat thin wrapper for QA pipeline."""
+    """Backward-compat thin wrapper for knowledge pipeline."""
 
-    def generate_qa_pipeline(self, input_path: Path, output_dir: Path) -> None:  # noqa: D102
-        """Runs the full QA generation pipeline."""
-        _generate_qa_pipeline(input_path, output_dir)
+    def run_knowledge_pipeline(self, input_path: Path, output_dir: Path) -> None:  # noqa: D102
+        """Runs the full knowledge building pipeline."""
+        _run_knowledge_pipeline(input_path, output_dir)
+
+    # Backwards compatibility with previous API
+    generate_qa_pipeline = run_knowledge_pipeline

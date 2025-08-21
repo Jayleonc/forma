@@ -85,7 +85,7 @@ def convert(
 
 
 @app.command(
-    "qa", help="从 Markdown 文件生成结构化的问答对 (FAQ) CSV 文件。"
+    "qa", help="从 Markdown 文档构建分层的 RAG 知识库 (.jsonl)。"
 )
 def generate_qa(
     input_path: Path = typer.Argument(
@@ -101,19 +101,19 @@ def generate_qa(
         ...,
         "-o",
         "--output",
-        help="用于保存输出 CSV 文件的目录。",
+        help="用于保存输出 JSONL 文件的目录。",
         file_okay=False,
         dir_okay=True,
         writable=True,
         resolve_path=True,
     ),
 ) -> None:
-    """接收一个Markdown文件，通过三阶段LLM流水线生成高质量的问答对，并保存为CSV文件。"""
+    """从Markdown文档构建分层的知识库并保存为JSONL文件。"""
 
-    from forma.workflows.qa_pipeline import generate_qa_pipeline
+    from forma.workflows.knowledge_pipeline import run_knowledge_pipeline
 
-    generate_qa_pipeline(input_path, output_dir)
-    console.print(f"✅ QA 生成完成，结果已保存至 {output_dir}")
+    run_knowledge_pipeline(input_path, output_dir)
+    console.print(f"✅ 知识库构建完成，结果已保存至 {output_dir}")
 
 
 if __name__ == "__main__":
