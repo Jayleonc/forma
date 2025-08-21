@@ -79,9 +79,9 @@ class KnowledgeBuilder:
             )
         return EnrichedChunk(**chunk.model_dump(), knowledge=knowledge)
 
-    def _discover_global_themes(self, enriched_chunks: List[EnrichedChunk]) -> List[Dict]:
-        """从多个富集文本块中发现全局主题。"""
-        template = self.prompt_manager.get_prompt("theme_generation_prompt")
+    def _discover_global_categories(self, enriched_chunks: List[EnrichedChunk]) -> List[Dict]:
+        """从多个富集文本块中发现全局分类。"""
+        template = self.prompt_manager.get_prompt("category_generation_prompt")
         prompt_template = ChatPromptTemplate.from_messages(
             [
                 SystemMessage(content=template.get("system", "")),
@@ -124,14 +124,13 @@ class KnowledgeBuilder:
             text = getattr(result, "content", "") if hasattr(result, "content") else result
             return _safe_json_loads(text)
         except Exception as e:
-            print(f"主题发现步骤出错: {e}")
+            print(f"分类发现步骤出错: {e}")
             return []
-
-    def _fuse_knowledge_by_theme(
-        self, theme: str, related_chunks: List[EnrichedChunk]
+    def _fuse_knowledge_by_category(
+        self, category: str, related_chunks: List[EnrichedChunk]
     ) -> AuthoritativeKnowledgeUnit:
-        """根据特定主题融合知识，形成权威知识单元。"""
-        template = self.prompt_manager.get_prompt("theme_synthesis_prompt")
+        """根据特定分类融合知识，形成权威知识单元。"""
+        template = self.prompt_manager.get_prompt("category_synthesis_prompt")
         base_parser = PydanticOutputParser(
             pydantic_object=AuthoritativeKnowledgeUnit)
         fixing_parser = OutputFixingParser.from_llm(
@@ -158,7 +157,7 @@ class KnowledgeBuilder:
         try:
             response = chain.invoke(
                 {
-                    "theme": theme,
+                    "category": category,
                     "related_knowledge": json.dumps(payload, ensure_ascii=False),
                     "format_instructions": base_parser.get_format_instructions(),
                 }
@@ -166,9 +165,9 @@ class KnowledgeBuilder:
             if isinstance(response, AuthoritativeKnowledgeUnit):
                 return response
         except Exception as e:
-            print(f"主题融合步骤出错 (theme: {theme}): {e}")
+            print(f"分类融合步骤出错 (category: {category}): {e}")
         return AuthoritativeKnowledgeUnit(
-            theme=theme,
+            category=category,
             canonical_question="",
             canonical_answer="",
             source_chunks=[c.chunk_id for c in related_chunks],

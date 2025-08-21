@@ -55,28 +55,30 @@ def run_knowledge_pipeline(
         )
     )
 
-    console.rule("[bold cyan]Stage 3: Discover Themes[/bold cyan]", style="cyan")
-    themes = builder._discover_global_themes(enriched_chunks)
+    console.rule("[bold cyan]Stage 3: Discover Categories[/bold cyan]", style="cyan")
+    categories = builder._discover_global_categories(enriched_chunks)
     console.print(
         Panel(
-            json.dumps(themes, indent=2, ensure_ascii=False),
-            title="[bold green]Themes[/bold green]",
+            json.dumps(categories, indent=2, ensure_ascii=False),
+            title="[bold green]Categories[/bold green]",
             border_style="green",
         )
     )
 
-    theme_to_chunks: Dict[str, List[EnrichedChunk]] = {}
-    for item in themes:
-        theme = item.get("theme")
+    category_to_chunks: Dict[str, List[EnrichedChunk]] = {}
+    for item in categories:
+        category = item.get("category")
         chunk_ids = item.get("chunk_ids", [])
         related = [ec for ec in enriched_chunks if ec.chunk_id in chunk_ids]
-        if theme:
-            theme_to_chunks[theme] = related
+        if category:
+            category_to_chunks[category] = related
 
-    console.rule("[bold cyan]Stage 4: Fuse Knowledge by Theme[/bold cyan]", style="cyan")
+    console.rule("[bold cyan]Stage 4: Fuse Knowledge by Category[/bold cyan]", style="cyan")
     knowledge_units: List[AuthoritativeKnowledgeUnit] = []
-    for theme, related in theme_to_chunks.items():
-        knowledge_units.append(builder._fuse_knowledge_by_theme(theme, related))
+    for category, related in category_to_chunks.items():
+        knowledge_units.append(
+            builder._fuse_knowledge_by_category(category, related)
+        )
     console.print(
         Panel(
             json.dumps([ku.model_dump() for ku in knowledge_units], indent=2, ensure_ascii=False),
@@ -102,7 +104,7 @@ def run_knowledge_pipeline(
                 data = json.loads(line)
                 question = data.get("canonical_question")
                 answer = data.get("canonical_answer")
-                category = data.get("theme")
+                category = data.get("category")
                 csv_records.append(
                     {"question": question, "answer": answer, "category": category}
                 )
