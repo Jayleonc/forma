@@ -7,6 +7,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List
 
+import pandas as pd
 from rich.console import Console
 from rich.panel import Panel
 
@@ -19,7 +20,9 @@ __all__ = ["run_knowledge_pipeline"]
 console = Console()
 
 
-def run_knowledge_pipeline(input_path: Path, output_dir: Path) -> None:
+def run_knowledge_pipeline(
+    input_path: Path, output_dir: Path, export_csv: bool = False
+) -> None:
     """Run the four-stage knowledge building pipeline."""
     md_content = input_path.read_text(encoding="utf-8")
 
@@ -90,3 +93,22 @@ def run_knowledge_pipeline(input_path: Path, output_dir: Path) -> None:
     console.print(
         f"\n[bold green]✔ Knowledge pipeline complete. Output saved to {output_path}[/bold green]"
     )
+
+    if export_csv:
+        csv_output_path = output_path.with_suffix(".csv")
+        csv_records: List[Dict[str, str]] = []
+        with open(output_path, "r", encoding="utf-8") as f:
+            for line in f:
+                data = json.loads(line)
+                question = data.get("canonical_question")
+                answer = data.get("canonical_answer")
+                category = data.get("theme")
+                csv_records.append(
+                    {"question": question, "answer": answer, "category": category}
+                )
+        df = pd.DataFrame(csv_records)
+        df.to_csv(csv_output_path, index=False)
+        console.print(
+            f"✅  Successfully exported flattened knowledge to {csv_output_path}"
+        )
+
