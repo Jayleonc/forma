@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
 
 class Chunk(BaseModel):
@@ -31,16 +31,13 @@ class AuthoritativeKnowledgeUnit(BaseModel):
     """Represents an authoritative unit of knowledge synthesised across chunks."""
 
     category: str
-    canonical_question: str
-    canonical_answer: str
+    qa_pairs: List[Dict[str, str]] = Field(default_factory=list)
     source_chunks: List[str] = Field(default_factory=list)
     raw_knowledge_snippets: Optional[List[Dict[str, Any]]] = None
 
 
-class AuthoritativeKnowledgeList(BaseModel):
+class AuthoritativeKnowledgeList(RootModel[List[AuthoritativeKnowledgeUnit]]):
     """Wrapper model for a list of authoritative knowledge units."""
-
-    __root__: List[AuthoritativeKnowledgeUnit]
 
 
 __all__ = [

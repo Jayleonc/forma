@@ -107,6 +107,12 @@ def generate_qa(
         writable=True,
         resolve_path=True,
     ),
+    name: str | None = typer.Option(
+        None,
+        "-n",
+        "--name",
+        help="输出文件的基准名称（不包含扩展名）。若未提供，则使用输入文件名。",
+    ),
     export_csv: bool = typer.Option(
         False,
         "--export-csv",
@@ -118,7 +124,7 @@ def generate_qa(
 
     from forma.workflows.knowledge_pipeline import run_knowledge_pipeline
 
-    run_knowledge_pipeline(input_path, output_dir, export_csv=export_csv)
+    run_knowledge_pipeline(input_path, output_dir, export_csv=export_csv, output_name=name)
     console.print(f"✅ 知识库构建完成，结果已保存至 {output_dir}")
 
 

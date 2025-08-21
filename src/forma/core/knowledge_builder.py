@@ -80,6 +80,62 @@ class KnowledgeBuilder:
             )
         return EnrichedChunk(**chunk.model_dump(), knowledge=knowledge)
 
+    def distill_knowledge_in_batch(self, chunks: List[Chunk]) -> List[EnrichedChunk]:
+        """批量处理多个文本块的知识提炼任务，使用 LangChain 的 `chain.batch()` 并发调用。
+
+        Args:
+            chunks: 待处理的文本块列表。
+
+        Returns:
+            包含知识提炼结果的 `EnrichedChunk` 列表，顺序与输入保持一致。
+        """
+        template = self.prompt_manager.get_prompt("knowledge_distillation_prompt")
+        base_parser = PydanticOutputParser(pydantic_object=DistilledKnowledge)
+        fixing_parser = OutputFixingParser.from_llm(llm=self.client, parser=base_parser)
+
+        prompt_template = ChatPromptTemplate.from_messages(
+            [
+                SystemMessage(content=template.get("system", "")),
+                HumanMessagePromptTemplate.from_template(
+                    template.get("user", "") + "\n{format_instructions}"
+                ),
+            ]
+        )
+        chain = prompt_template | self.client | fixing_parser
+
+        # 构造批量输入
+        batch_inputs = [
+            {
+                "chunk_text": ch.text,
+                "format_instructions": base_parser.get_format_instructions(),
+            }
+            for ch in chunks
+        ]
+
+        # 执行批量调用
+        try:
+            batch_results = chain.batch(batch_inputs)
+        except Exception as e:
+            print(f"知识批量提炼步骤出错: {e}")
+            batch_results = [None] * len(chunks)
+
+        # 解析结果，保证健壮性
+        enriched_chunks: List[EnrichedChunk] = []
+        for ch, res in zip(chunks, batch_results):
+            if isinstance(res, DistilledKnowledge):
+                knowledge = res
+            else:
+                print(f"chunk {ch.chunk_id} 提炼失败，将使用空知识占位。")
+                knowledge = DistilledKnowledge(
+                    summary="",
+                    qa_pairs=[],
+                    hypothetical_questions=[],
+                    entities={},
+                )
+            enriched_chunks.append(EnrichedChunk(**ch.model_dump(), knowledge=knowledge))
+        return enriched_chunks
+
+    # 第三阶段：全局知识整合
     def _synthesize_global_knowledge(
         self, enriched_chunks: List[EnrichedChunk]
     ) -> List[AuthoritativeKnowledgeUnit]:
@@ -120,7 +176,7 @@ class KnowledgeBuilder:
                 }
             )
             if isinstance(response, AuthoritativeKnowledgeList):
-                return response.__root__
+                return response.root
         except Exception as e:
             print(f"全局知识合成步骤出错: {e}")
         return []

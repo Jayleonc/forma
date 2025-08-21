@@ -56,7 +56,8 @@ def get_llm_config() -> LlmConfig:
 
     return LlmConfig(
         api_key=api_key,
-        model=os.getenv("LLM_MODEL", "Qwen3-32B"),
+        # model=os.getenv("LLM_MODEL", "Qwen3-32B"),
+        model="DeepSeek-V3",
         base_url=os.getenv("LLM_BASE_URL") or os.getenv("FORMA_BASE_URL"),
     )
 
