@@ -30,6 +30,7 @@ class KnowledgeBuilder:
         client: ChatOpenAI | None = None,
     ) -> None:
         cfg = get_llm_config()
+        print(cfg)
         self.client = client or ChatOpenAI(
             model=cfg.model, api_key=cfg.api_key, base_url=cfg.base_url
         )
