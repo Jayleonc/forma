@@ -31,16 +31,16 @@ class PromptManager:
     [特例说明：`format_instructions`]
     注意，`format_instructions` 出现在某些提示词的白名单中，但并未在 YAML 文件中定义。
     这是因为它是一个由 LangChain 的 `OutputParser` 在代码中动态生成的变量，用于指示输出格式。
-    `knowledge_distillation` 和 `theme_synthesis` 任务需要严格的 JSON 结构，因此使用了 `OutputParser`，
+    `knowledge_distillation` 和 `category_synthesis` 任务需要严格的 JSON 结构，因此使用了 `OutputParser`，
     并在代码中拼接了 `{format_instructions}` 变量。
-    而 `theme_generation_prompt` 任务的输出格式较简单，未使用 `OutputParser`，因此其白名单中不包含此变量。
+    而 `category_generation_prompt` 任务的输出格式较简单，未使用 `OutputParser`，因此其白名单中不包含此变量。
     """
 
     _ALLOWED_VARS_MAP = {
         "knowledge_distillation_prompt": {"chunk_text", "format_instructions"},
-        "theme_generation_prompt": {"enriched_chunks"},
-        "theme_synthesis_prompt": {
-            "theme",
+        "category_generation_prompt": {"enriched_chunks"},
+        "category_synthesis_prompt": {
+            "category",
             "related_knowledge",
             "format_instructions",
         },

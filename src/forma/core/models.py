@@ -30,7 +30,7 @@ class EnrichedChunk(Chunk):
 class AuthoritativeKnowledgeUnit(BaseModel):
     """Represents an authoritative unit of knowledge synthesised across chunks."""
 
-    theme: str
+    category: str
     canonical_question: str
     canonical_answer: str
     source_chunks: List[str] = Field(default_factory=list)

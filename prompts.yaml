@@ -1,13 +1,15 @@
 prompts:
   default_image_description:
     user: >-
-      请详细描述这张图片或页面的内容，真实的识别并转录其中所有的文字，并解释关键的视觉元素（如图表、照片）。要求：请以 Markdown 输出，不需要 ```markdown 标记。
+      请详细描述这张图片或页面的内容，真实的识别并转录其中所有的文字，并解释关键的视觉元素（如图表、照片）。要求：请以 Markdown
+输出，不需要 ```markdown 标记。
 
   technical_diagram_analysis:
     system: >-
       你是一位专业的系统架构师，你的任务是分析技术架构图。
     user: >-
-      请以专业的视角分析这张系统架构图。识别出图中的所有组件、它们之间的连接关系、以及数据流动的方向。最后，以 Markdown 项目列表的形式总结你的分析。
+      请以专业的视角分析这张系统架构图。识别出图中的所有组件、它们之间的连接关系、以及数据流动的方向。最后，以 Markdown 项目列表
+的形式总结你的分析。
 
   knowledge_distillation_prompt:
     system: >-
@@ -26,32 +28,32 @@ prompts:
       {chunk_text}
       ---
 
-  theme_generation_prompt:
+  category_generation_prompt:
     system: >-
-      你是一位知识架构规划专家，负责从多段提炼后的信息中识别全局主题。
+      你是一位知识架构规划专家，负责从多段提炼后的信息中识别精炼的分类标签。
     user: >-
-      根据以下已经提炼的知识块（包含摘要和问题），识别核心主题并为每个主题列出相关的 chunk_id。
-      请以 JSON 格式输出: [{"theme": "主题", "chunk_ids": ["id1", "id2"]}, ...]
+      根据以下已经提炼的知识块（包含摘要和问题），识别核心分类并为每个分类列出相关的 chunk_id。
+      请以 JSON 格式输出: [{"category": "分类", "chunk_ids": ["id1", "id2"]}, ...]
 
       知识块列表:
       ---
       {enriched_chunks}
       ---
 
-  theme_synthesis_prompt:
+  category_synthesis_prompt:
     system: >-
       你是一位资深技术写作者，擅长整合多来源知识形成权威结论。
     user: >-
-      现在有一个主题和若干相关的知识块，请综合这些信息，生成一个权威的问答单元。输出 JSON 格式:
+      现在有一个分类和若干相关的知识块，请综合这些信息，生成一个权威的问答单元。输出 JSON 格式:
       {
-        "theme": "主题",
+        "category": "分类",
         "canonical_question": "标准问题",
         "canonical_answer": "标准答案",
         "source_chunks": ["chunk_id1", "chunk_id2"],
         "raw_knowledge_snippets": [{"chunk_id": "id", "summary": "..."}]
       }
 
-      主题: {theme}
+      分类: {category}
 
       相关知识:
       ---
