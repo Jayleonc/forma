@@ -1,19 +1,2 @@
-"""Core processing utilities for forma."""
+"""The `core` package is deprecated and will be removed in a future version."""
 
-from .processors import (
-    Processor,
-    PdfProcessor,
-    ImageProcessor,
-    DocxProcessor,
-    PptxProcessor,
-    ProcessingResult,
-)
-
-__all__ = [
-    "Processor",
-    "PdfProcessor",
-    "ImageProcessor",
-    "DocxProcessor",
-    "PptxProcessor",
-    "ProcessingResult",
-]

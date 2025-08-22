@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .ocr import ocr_image_file
+from ..ocr import ocr_image_file
 
 def parse_pdf(pdf_path: str) -> str:
     """Compatibility wrapper around :class:`PdfProcessor`.
@@ -14,7 +14,7 @@ def parse_pdf(pdf_path: str) -> str:
     new processor based architecture is adopted.
     """
 
-    from .processors import PdfProcessor
+    from ..conversion.processors import PdfProcessor
 
     processor = PdfProcessor()
     result = processor.process(Path(pdf_path))

@@ -20,7 +20,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from .workflows.conversion import run_conversion
+from .conversion import run_conversion
 from .custom_types import Strategy
 
 app = typer.Typer(
@@ -134,7 +134,7 @@ def generate_qa(
 ) -> None:
     """从Markdown文档构建分层的知识库并保存为JSONL文件。"""
 
-    from forma.workflows.knowledge_pipeline import run_knowledge_pipeline
+    from forma.qa.pipeline import run_knowledge_pipeline
 
     run_knowledge_pipeline(input_path, output_dir, export_csv=export_csv, output_name=name)
     console.print(f"✅ 知识库构建完成，结果已保存至 {output_dir}")
@@ -142,7 +142,7 @@ def generate_qa(
 
 def _process_single_file(input_path: Path, output_dir: Path) -> tuple[str, int, Path]:
     """Worker helper to build knowledge for a single markdown file."""
-    from forma.workflows.knowledge_pipeline import run_knowledge_pipeline
+    from forma.qa.pipeline import run_knowledge_pipeline
 
     run_knowledge_pipeline(input_path, output_dir, export_csv=False)
     output_path = output_dir / f"{input_path.stem}_knowledge_base.jsonl"

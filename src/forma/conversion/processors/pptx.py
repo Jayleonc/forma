@@ -10,9 +10,9 @@ from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 from .base import Processor, ProcessingResult
-from ..ocr import parse_image_to_markdown
-from ..vlm import VlmParser
-from ...utils.converters import convert_ppt_slide_to_image
+from ...ocr import parse_image_to_markdown
+from ...vision import VlmParser
+from ...shared.utils.converters import convert_ppt_slide_to_image
 
 
 class PptxProcessor(Processor):

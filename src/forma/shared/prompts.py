@@ -54,7 +54,7 @@ class PromptManager:
 
     @staticmethod
     def _sanitize_template(text: str, allowed_vars: set[str]) -> str:
-        """转义模板中所有非法的花括号变量。"""
+        """转义模板中所有非法的花括号变量。""" 
         # 1. 将所有单花括号替换为双花括号，以进行转义
         sanitized = text.replace("{", "{{").replace("}", "}}")
         # 2. 恢复允许的变量，将双花括号转义还原为单花括号

@@ -9,8 +9,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
-from ..custom_types import Strategy
-from ..core.processors import (
+from ..vision import OpenAIVLMClient, VlmParser, VLMClient
+from ..shared.custom_types import Strategy
+from .processors import (
     DocxProcessor,
     ImageProcessor,
     PdfProcessor,
@@ -18,8 +19,7 @@ from ..core.processors import (
     Processor,
     ProcessingResult,
 )
-from ..core.vlm import VlmParser
-from ..config import get_vlm_config
+from ..shared.config import get_vlm_config
 
 THRESHOLD = get_vlm_config().auto_threshold
 
@@ -56,7 +56,13 @@ def run_conversion(
 
     files = _discover_files(inputs, recursive)
     output_dir.mkdir(parents=True, exist_ok=True)
-    vlm_parser = VlmParser() if strategy != Strategy.FAST else None
+
+    vlm_client: VLMClient | None = None
+    if strategy != Strategy.FAST:
+        vlm_client = OpenAIVLMClient()
+
+    vlm_parser = VlmParser(vlm_client) if strategy != Strategy.FAST else None
+
     # If a custom output name is provided and there's only one file, use it.
     # Otherwise, this parameter is ignored.
     effective_output_name = output_name if len(files) == 1 else None
@@ -67,6 +73,7 @@ def run_conversion(
             output_dir,
             strategy,
             vlm_parser,
+            vlm_client,
             prompt_name,
             effective_output_name,
         )
@@ -89,14 +96,14 @@ def _discover_files(inputs: List[Path], recursive: bool) -> List[Path]:
     return files
 
 
-def _select_processor(path: Path) -> Processor | None:
+def _select_processor(path: Path, vlm_client: VLMClient | None) -> Processor | None:
     suffix = path.suffix.lower()
     if suffix == ".pdf":
         return PdfProcessor()
     if suffix in {".png", ".jpg", ".jpeg", ".bmp"}:
         return ImageProcessor()
     if suffix == ".docx":
-        return DocxProcessor()
+        return DocxProcessor(vlm_client=vlm_client)
     if suffix == ".pptx":
         return PptxProcessor()
     return None
@@ -107,10 +114,11 @@ def _process_single_file(
     output_dir: Path,
     strategy: Strategy,
     vlm_parser: VlmParser | None = None,
+    vlm_client: VLMClient | None = None,
     prompt_name: str = "default_image_description",
     output_name: str | None = None,
 ) -> None:
-    processor = _select_processor(path)
+    processor = _select_processor(path, vlm_client)
     if processor is None:
         return
 
@@ -120,14 +128,14 @@ def _process_single_file(
     # For AUTO mode on images, prefer deep strategy directly.
     if strategy == Strategy.AUTO and isinstance(processor, ImageProcessor):
         if not vlm_parser:
-            vlm_parser = VlmParser()
+            vlm_parser = VlmParser(vlm_client)
         markdown = vlm_parser.parse(path, prompt_name=prompt_name)
         output_path.write_text(markdown, encoding="utf-8")
         return
 
     if strategy == Strategy.DEEP:
         if not vlm_parser:
-            vlm_parser = VlmParser()
+            vlm_parser = VlmParser(vlm_client)
         markdown = vlm_parser.parse(path, prompt_name=prompt_name)
         output_path.write_text(markdown, encoding="utf-8")
         return
@@ -140,7 +148,7 @@ def _process_single_file(
         result.low_confidence or result.text_char_count < THRESHOLD
     ):
         if not vlm_parser:
-            vlm_parser = VlmParser()
+            vlm_parser = VlmParser(vlm_client)
         final_md = vlm_parser.parse(path, prompt_name=prompt_name)
 
     output_path.write_text(final_md, encoding="utf-8")

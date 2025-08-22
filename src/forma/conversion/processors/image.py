@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .base import ProcessingResult, Processor
-from ..ocr import parse_image_to_markdown
+from ...ocr import parse_image_to_markdown
 
 
 class ImageProcessor(Processor):

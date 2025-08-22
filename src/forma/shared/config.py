@@ -35,7 +35,7 @@ def get_vlm_config() -> VlmConfig:
     api_key = os.getenv("VLM_API_KEY") or os.getenv("FORMA_PAID_OPENAI_API_KEY")
     if not api_key:
         raise ValueError(
-            "API key not found. Please set VLM_API_KEY or FORMA_OPENAI_API_KEY."
+            "API key not found. Please set VLM_API_KEY or FORMA_PAID_OPENAI_API_KEY."
         )
 
     return VlmConfig(
@@ -51,7 +51,7 @@ def get_llm_config() -> LlmConfig:
     api_key = os.getenv("LLM_API_KEY") or os.getenv("FORMA_PAID_OPENAI_API_KEY")
     if not api_key:
         raise ValueError(
-            "API key not found. Please set LLM_API_KEY or FORMA_OPENAI_API_KEY."
+            "API key not found. Please set LLM_API_KEY or FORMA_PAID_OPENAI_API_KEY."
         )
 
     return LlmConfig(

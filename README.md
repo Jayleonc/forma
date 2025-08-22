@@ -6,13 +6,13 @@
 
 ## ✨ 核心功能
 
-- **统一的命令行接口**: 所有操作都通过 `forma convert` 命令完成，清晰易用。
+- **统一的命令行接口**: 所有操作都通过 `forma convert` 和 `forma generate-qa` 命令完成，清晰易用。
 - **多种处理策略**:
   - `fast`: 使用本地解析和 OCR，速度快，适用于文本型文档。
   - `deep`: 调用强大的视觉语言模型（VLM），由可定制的提示词驱动，精准处理扫描件、复杂排版和图片内容。
   - `auto`: 智能路由，自动为每个文件选择 `fast` 或 `deep` 策略。
 - **广泛的格式支持**: 支持 PDF、DOCX、PPTX、PNG、JPG 等常见文档和图片格式。
-- **高度可扩展**: 模块化的处理器架构，方便未来添加新的文件格式支持。
+- **高度可扩展**: 采用按功能划分的模块化包结构，方便未来添加新的文件格式支持和功能。
 - **提示词工程**: 将提示词与代码分离到 `prompts.yaml`，方便用户按需定制。
 
 ## 🚀 快速上手
@@ -53,7 +53,6 @@ make deps
 **安装方法:**
 
 - **macOS (使用 Homebrew):**
-
   ```bash
   brew install --cask libreoffice
   ```
@@ -65,10 +64,14 @@ make deps
 
 ### 2. 配置 API 密钥
 
-`deep` 和 `auto` 策略需要使用视觉语言模型，请在项目根目录创建 `.env` 文件并填入您的 API 密钥：
+`deep` 和 `auto` 策略需要使用视觉语言模型。请在项目根目录创建 `.env` 文件并填入您的 API 密钥：
 
 ```env
-DASHSCOPE_API_KEY="sk-your-api-key-here"
+# 请填入您的 OpenAI API 密钥
+FORMA_OPENAI_API_KEY="sk-your-api-key-here"
+
+# 或者，您也可以使用 VLM_API_KEY 变量名
+# VLM_API_KEY="sk-your-api-key-here"
 ```
 
 ### 3. 使用
@@ -77,16 +80,16 @@ DASHSCOPE_API_KEY="sk-your-api-key-here"
 
 ```bash
 # 使用 fast 策略转换单个 PDF
-forma convert "./data/pdfs/沐曦招股书.pdf" -o "./output" -s fast
+uv run forma convert "./data/pdfs/沐曦招股书.pdf" -o "./output" -s fast
 
 # 使用 deep 策略转换一张图片
-forma convert "./data/image/1.png" -o "./output" -s deep
+uv run forma convert "./data/image/1.png" -o "./output" -s deep
 
 # 使用 auto 策略递归处理整个文件夹 (默认策略)
-forma convert "./data" -o "./output"
+uv run forma convert "./data" -o "./output"
 
 # 使用自定义提示词进行深度分析
-forma convert "./data/image/1.png" -o "./output" -s deep -p "technical_diagram_analysis"
+uv run forma convert "./data/image/1.png" -o "./output" -s deep -p "technical_diagram_analysis"
 ```
 
 **参数说明:**
@@ -99,7 +102,7 @@ forma convert "./data/image/1.png" -o "./output" -s deep -p "technical_diagram_a
 
 ## 🛠️ 架构概览
 
-`forma` 采用分层、模块化的架构：
+`forma` 采用按功能组织的包结构，清晰地分离了不同的业务领域：
 
 ```
 . (项目根目录)
@@ -107,57 +110,58 @@ forma convert "./data/image/1.png" -o "./output" -s deep -p "technical_diagram_a
 └── src/forma/
     ├── __init__.py
     ├── cli.py            # 命令行接口 (Typer)
-    ├── config.py         # 配置管理 (Pydantic)
-    ├── controller.py     # (兼容层) 旧的业务流程控制器
-    ├── types.py          # 项目通用类型定义
-    ├── utils/            # 通用工具模块
-    ├── workflows/        # 核心业务工作流
+    ├── conversion/       # 核心功能：文档转换
     │   ├── __init__.py
-    │   ├── conversion.py   # 文档转换工作流
-    │   └── qa_pipeline.py  # 问答对生成流水线
-    └── core/
+    │   ├── workflow.py     # 转换流程的业务逻辑编排
+    │   └── processors/     # 针对不同文件类型（PDF, DOCX等）的具体处理器
+    ├── ocr/              # 核心功能：光学字符识别（OCR）
+    │   ├── __init__.py
+    │   └── engine.py       # OCR 引擎的封装
+    ├── qa/               # 核心功能：问答对（QA）生成
+    │   ├── __init__.py
+    │   ├── builder.py      # QA 对的构建逻辑
+    │   └── pipeline.py     # QA 生成的完整流水线
+    ├── shared/           # 跨功能共享的模块
+    │   ├── __init__.py
+    │   ├── config.py       # 配置管理 (Pydantic)
+    │   ├── prompts.py      # 提示词管理器
+    │   └── utils/          # 通用工具函数
+    └── vision/           # 核心功能：视觉语言模型（VLM）交互
         ├── __init__.py
-        ├── prompt_manager.py # 提示词管理器
-        ├── vlm.py          # 视觉语言模型 (VLM) 抽象层
-        └── processors/     # 各文件类型的处理器包
-            ├── __init__.py
-            ├── base.py
-            ├── docx.py
-            ├── image.py
-            ├── pdf.py
-            └── pptx.py
+        ├── client.py       # VLM API 客户端
+        └── parser.py       # VLM 响应解析器
 ```
 
-- **`prompts.yaml`**: 定义 `deep` 策略使用的所有提示词，易于修改和扩展。
 - **`cli.py`**: 定义用户交互的命令行界面。
-- **`workflows/`**: 核心业务流程模块，将复杂的调用链（如文档转换、QA 生成）封装为独立的工作流。
-- **`controller.py`**: 一个轻量级的向后兼容层，将旧的调用委托给 `workflows` 中的新模块，在新代码中应优先使用 `workflows`。
-- **`prompt_manager.py`**: 负责从 `prompts.yaml` 加载和管理提示词。
-- **`vlm.py`**: 封装对 VLM 的调用，通过 `PromptManager` 获取提示词并发起请求。
-- **`config.py`**: 负责加载 `.env` 文件中的配置和密钥。
+- **`prompts.yaml`**: 定义 `deep` 策略使用的所有提示词，易于修改和扩展。
+- **`conversion/`**: 包含所有与文档格式转换相关的逻辑。
+- **`ocr/`**: 封装了 OCR 功能，供其他模块调用。
+- **`qa/`**: 实现了从文本生成结构化问答对的完整流程。
+- **`vision/`**: 负责与视觉语言模型进行交互，是 `deep` 策略的核心。
+- **`shared/`**: 存放被多个功能包共享的通用代码，如配置加载、工具函数等。
 
 ## 💡 工作原理
 
 1.  **`fast` 策略**:
 
-    - **PDF**: 使用 `pymupdf` 提取文本和图片。对于纯文本 PDF，直接提取；对于扫描件，提取图片后交由 OCR 处理。
+    - **PDF**: 使用 `pymupdf` 提取文本和图片。对于纯文本 PDF，直接提取；对于扫描件，提取图片后交由 `ocr` 模块处理。
     - **DOCX**: 采用混合策略以最大化保留表格等格式。
       1. **优先使用 `mammoth`**：将 DOCX 转换为 HTML，再转换为 Markdown，能较好地还原表格、列表和格式。
       2. **回退至 `python-docx`**：如果前一步失败，则启用基于 `python-docx` 的备用方案，逐一解析段落和表格，确保内容不丢失。
-    - **Image**: 使用 `paddleocr` 进行本地 OCR。
+    - **Image**: 使用 `ocr` 模块进行本地 OCR。
     - **PPTX**: 采用更智能的**混合策略**，对每一页幻灯片进行独立分析：
-      1. **智能决策**: 遍历每一页幻灯片，通过分析其内容构成来判断其是“内容页”还是“复杂页”。
+      1. **智能决策**: 遍历每一页幻灯片，分析其内容构成来判断是“内容页”还是“复杂页”。
          - **优先识别复杂对象**: 如果幻灯片包含 **图表 (Chart)**、**SmartArt** 或 **表格 (Table)**，则立即判定为“复杂页”。
          - **分析图文关系**: 如果页面主要是图片，文字极少，也判定为“复杂页”。
-      2. **内容页处理 (Fast Path)**: 对于其他所有页面（主要是文本密集型），直接使用 `python-pptx` 提取文本，并对页内图片进行 OCR。
-      3. **复杂页处理 (Deep Path)**: 对于被判定为“复杂页”的幻灯片，自动调用深度解析流程：
-         - 使用 **`LibreOffice`** (如果可用) 将其渲染为一张高清图片。
-         - 将此图片交由 **VLM** 进行视觉理解。
+      2. **内容页处理 (Fast Path)**: 对于文本密集型页面，直接使用 `python-pptx` 提取文本，并对页内图片进行 OCR。
+      3. **复杂页处理 (Deep Path)**: 对于“复杂页”，自动调用深度解析流程：
+         - 使用 **`LibreOffice`** (如果可用) 将其渲染为高清图片。
+         - 将此图片交由 `vision` 模块进行视觉理解。
 
 2.  **`deep` 策略**:
 
-    - 将文档页面或图片发送给视觉语言模型（如 `qwen-vl-max`）。
-    - 调用过程由 `prompts.yaml` 文件驱动。它会加载一个具名 prompt（默认为 `default_image_description`），该 prompt 包含精心设计的 `system` 和 `user` 指令，引导模型生成高质量的 Markdown 文本。
+    - 将文档页面或图片发送给 `vision` 模块。
+    - 调用过程由 `prompts.yaml` 文件驱动，引导模型生成高质量的 Markdown 文本。
 
 3.  **`auto` 策略**:
     - 首先执行 `fast` 策略。

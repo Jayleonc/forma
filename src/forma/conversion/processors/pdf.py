@@ -11,7 +11,7 @@ import fitz
 import pymupdf4llm
 
 from .base import ProcessingResult, Processor
-from .. import parser as _parser
+from ...ocr import ocr_image_file
 
 
 class PdfProcessor(Processor):
@@ -41,7 +41,7 @@ class PdfProcessor(Processor):
             if image_paths:
                 with ThreadPoolExecutor() as executor:
                     futures = [
-                        executor.submit(_parser.ocr_image_file, str(p))
+                        executor.submit(ocr_image_file, str(p))
                         for p in image_paths
                     ]
                     for future in as_completed(futures):

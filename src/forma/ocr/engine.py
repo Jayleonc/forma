@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, List, Optional
 import tempfile
-from ..utils.device import DEVICE
+from ..shared.utils.device import DEVICE
 
 # NOTE: PyMuPDF (fitz) is only needed for PDF OCR and imported lazily.
 

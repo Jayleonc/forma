@@ -4,10 +4,12 @@ import re
 import uuid
 from typing import List, Tuple
 
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
 from .models import Chunk
 
 
-class MarkdownChunker:
+class HierarchicalChunker:
     """Split markdown documents into hierarchical semantic chunks."""
 
     def __init__(self, max_length: int = 80000, source_filename: str | None = None) -> None:
@@ -15,30 +17,105 @@ class MarkdownChunker:
         self.source_filename = source_filename or ""
 
     def chunk(self, markdown_content: str) -> List[Chunk]:
-        """Recursively chunk markdown content using headers up to level 6."""
-        chunks = self._recursive_chunk(markdown_content, 2, None, [])
+        """Chunk markdown content using a hierarchical strategy."""
+        # Strategy 1: Chunk by standard Markdown headers
+        md_chunks = self._chunk_by_markdown_headers(markdown_content)
+        if md_chunks:
+            return md_chunks
 
-        # Find content before the first level 2 header
-        pattern = re.compile(r"^## (.+)", re.MULTILINE)
-        match = pattern.search(markdown_content)
+        # Strategy 2: Chunk by common non-standard headers (e.g., '一、', '1.')
+        regex_chunks = self._chunk_by_regex_headers(markdown_content)
+        if regex_chunks:
+            return regex_chunks
 
-        leading_text = markdown_content[:match.start()].strip(
-        ) if match else markdown_content.strip()
+        # Strategy 3: Fallback to recursive character splitting for unstructured text
+        return self._chunk_by_recursive_splitter(markdown_content)
 
-        if not chunks:
-            # If no sections were found, the whole document is one chunk
-            if leading_text:
-                chunk_id = str(uuid.uuid4())
-                return [Chunk(chunk_id=chunk_id, text=leading_text, metadata=self._create_metadata())]
+    def _chunk_by_markdown_headers(self, markdown_content: str) -> List[Chunk]:
+        """Attempts to chunk the document using standard Markdown headers (## to ######)."""
+        start_level = -1
+        for level in range(2, 7):
+            pattern = re.compile(rf"^{'#'*level} (.+)", re.MULTILINE)
+            if pattern.search(markdown_content):
+                start_level = level
+                break
+
+        if start_level == -1:
             return []
 
+        pattern = re.compile(rf"^{'#'*start_level} (.+)", re.MULTILINE)
+        match = pattern.search(markdown_content)
+        leading_text = markdown_content[: match.start()].strip() if match else ""
+
+        chunks = self._recursive_chunk(markdown_content, start_level, None, [])
+
         if leading_text:
-            # If there is text before the first header, create a chunk for it
             chunk_id = str(uuid.uuid4())
-            chunks.insert(0, Chunk(chunk_id=chunk_id,
-                          text=leading_text, metadata=self._create_metadata()))
+            chunks.insert(
+                0,
+                Chunk(
+                    chunk_id=chunk_id, text=leading_text, metadata=self._create_metadata()
+                ),
+            )
+        return chunks
+
+    def _chunk_by_regex_headers(self, markdown_content: str) -> List[Chunk]:
+        """Attempts to chunk by common patterns like '一、', '(一)', '1.' etc."""
+        # Enhanced regex to capture more non-standard headers, including Chinese numerals
+        regex_patterns = [
+            r"^第[一二三四五六七八九十百千万]+章.*",  # e.g., 第一章 Title
+            r"^第[一二三四五六七八九十百千万]+节.*",  # e.g., 第一节 Title
+            r"^[一二三四五六七八九十百千万]+、.*",  # e.g., 一、Title
+            r"^（[一二三四五六七八九十百千万]+）.*",  # e.g., （一）Title
+            r"^\d+\.\s+.*",  # e.g., 1. Title
+        ]
+        combined_regex = "|".join(regex_patterns)
+        pattern = re.compile(combined_regex, re.MULTILINE)
+        matches = list(pattern.finditer(markdown_content))
+
+        if len(matches) < 2:  # Not enough sections to be considered structured
+            return []
+
+        chunks = []
+        # Add the text before the first header as a chunk
+        first_match_start = matches[0].start()
+        if first_match_start > 0:
+            leading_text = markdown_content[:first_match_start].strip()
+            if leading_text:
+                chunks.append(Chunk(chunk_id=str(uuid.uuid4()), text=leading_text, metadata=self._create_metadata()))
+
+        for i, match in enumerate(matches):
+            start = match.start()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(markdown_content)
+            section_text = markdown_content[start:end].strip()
+
+            if section_text:
+                chunk_id = str(uuid.uuid4())
+                chunks.append(Chunk(chunk_id=chunk_id, text=section_text, metadata=self._create_metadata()))
 
         return chunks
+
+    def _chunk_by_recursive_splitter(self, markdown_content: str) -> List[Chunk]:
+        """Fallback chunking using RecursiveCharacterTextSplitter."""
+        if not markdown_content.strip():
+            return []
+
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.max_length,
+            chunk_overlap=int(self.max_length * 0.1), # 10% overlap
+            separators=["\n\n", "\n", " ", ""],
+        )
+        
+        texts = splitter.split_text(markdown_content)
+        
+        return [
+            Chunk(
+                chunk_id=str(uuid.uuid4()),
+                text=text,
+                metadata=self._create_metadata(),
+            )
+            for text in texts
+        ]
 
     def _recursive_chunk(
         self,
@@ -186,4 +263,4 @@ class MarkdownChunker:
         return sections
 
 
-__all__ = ["MarkdownChunker"]
+__all__ = ["HierarchicalChunker"]

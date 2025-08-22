@@ -10,9 +10,9 @@ from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
-from ..config import get_llm_config
-from .prompt_manager import PromptManager
-from .models import (
+from ..shared.config import get_llm_config
+from ..shared.prompts import PromptManager
+from ..shared.models import (
     Chunk,
     DistilledKnowledge,
     EnrichedChunk,
