@@ -149,7 +149,14 @@ def _process_single_file(input_path: Path, output_dir: Path) -> tuple[str, int, 
     qa_count = 0
     with output_path.open("r", encoding="utf-8") as f:
         for line in f:
-            data = json.loads(line)
+            s = line.strip()
+            if not s:
+                continue
+            try:
+                data = json.loads(s)
+            except json.JSONDecodeError:
+                console.print(f"[yellow]警告[/]: 跳过无法解析的 JSONL 行: {s[:80]}")
+                continue
             qa_count += len(data.get("qa_pairs", []))
     return input_path.name, qa_count, output_path
 
@@ -230,7 +237,16 @@ def build_knowledge_base(
         for src_path, jsonl_path in results:
             with jsonl_path.open("r", encoding="utf-8") as f:
                 for line in f:
-                    data = json.loads(line)
+                    s = line.strip()
+                    if not s:
+                        continue
+                    try:
+                        data = json.loads(s)
+                    except json.JSONDecodeError:
+                        console.print(
+                            f"[yellow]警告[/]: 跳过无法解析的 JSONL 行 (文件: {jsonl_path.name}): {s[:80]}"
+                        )
+                        continue
                     category = data.get("category")
                     for qa in data.get("qa_pairs", []):
                         records.append(
