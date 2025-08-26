@@ -23,13 +23,19 @@ class HierarchicalChunker:
         if md_chunks:
             return md_chunks
 
-        # Strategy 2: Chunk by common non-standard headers (e.g., '一、', '1.')
+        # Strategy 2: Chunk by semantic markdown splitting (handles bold headers etc.)
+        semantic_chunks = self._chunk_by_semantic_markdown_splitter(
+            markdown_content)
+        if semantic_chunks:
+            return semantic_chunks
+
+        # Strategy 3: Chunk by common non-standard headers (e.g., '一、', '1.')
         regex_chunks = self._chunk_by_regex_headers(markdown_content)
         if regex_chunks:
             return regex_chunks
 
-        # Strategy 3: Fallback to recursive character splitting for unstructured text
-        return self._chunk_by_recursive_splitter(markdown_content)
+        # Strategy 4: Fallback to recursive character splitting for unstructured text
+        return self._chunk_by_fallback_splitter(markdown_content)
 
     def _chunk_by_markdown_headers(self, markdown_content: str) -> List[Chunk]:
         """Attempts to chunk the document using standard Markdown headers (## to ######)."""
@@ -45,7 +51,8 @@ class HierarchicalChunker:
 
         pattern = re.compile(rf"^{'#'*start_level} (.+)", re.MULTILINE)
         match = pattern.search(markdown_content)
-        leading_text = markdown_content[: match.start()].strip() if match else ""
+        leading_text = markdown_content[: match.start()].strip(
+        ) if match else ""
 
         chunks = self._recursive_chunk(markdown_content, start_level, None, [])
 
@@ -58,6 +65,31 @@ class HierarchicalChunker:
                 ),
             )
         return chunks
+
+    def _chunk_by_semantic_markdown_splitter(self, markdown_content: str) -> List[Chunk]:
+        """Attempts to chunk by semantic markdown separators like bolded headers."""
+        # Separators are ordered from most specific to most general.
+        # This handles documents that use bold text for headers.
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.max_length,
+            chunk_overlap=int(self.max_length * 0.1),
+            separators=["\n\n**", "\n\n##", "\n\n#", "\n\n", "\n", " ", ""],
+        )
+
+        texts = splitter.split_text(markdown_content)
+
+        # If it only results in one chunk, it's likely not a good split.
+        if len(texts) <= 1:
+            return []
+
+        return [
+            Chunk(
+                chunk_id=str(uuid.uuid4()),
+                text=text,
+                metadata=self._create_metadata(),
+            )
+            for text in texts
+        ]
 
     def _chunk_by_regex_headers(self, markdown_content: str) -> List[Chunk]:
         """Attempts to chunk by common patterns like '一、', '(一)', '1.' etc."""
@@ -82,32 +114,36 @@ class HierarchicalChunker:
         if first_match_start > 0:
             leading_text = markdown_content[:first_match_start].strip()
             if leading_text:
-                chunks.append(Chunk(chunk_id=str(uuid.uuid4()), text=leading_text, metadata=self._create_metadata()))
+                chunks.append(Chunk(chunk_id=str(uuid.uuid4()),
+                              text=leading_text, metadata=self._create_metadata()))
 
         for i, match in enumerate(matches):
             start = match.start()
-            end = matches[i + 1].start() if i + 1 < len(matches) else len(markdown_content)
+            end = matches[i + 1].start() if i + \
+                1 < len(matches) else len(markdown_content)
             section_text = markdown_content[start:end].strip()
 
             if section_text:
                 chunk_id = str(uuid.uuid4())
-                chunks.append(Chunk(chunk_id=chunk_id, text=section_text, metadata=self._create_metadata()))
+                chunks.append(
+                    Chunk(chunk_id=chunk_id, text=section_text, metadata=self._create_metadata()))
 
         return chunks
 
-    def _chunk_by_recursive_splitter(self, markdown_content: str) -> List[Chunk]:
-        """Fallback chunking using RecursiveCharacterTextSplitter."""
+    def _chunk_by_fallback_splitter(self, markdown_content: str) -> List[Chunk]:
+        """Fallback chunking using a basic RecursiveCharacterTextSplitter."""
         if not markdown_content.strip():
             return []
 
+        # This is the most basic splitter for unstructured text.
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.max_length,
-            chunk_overlap=int(self.max_length * 0.1), # 10% overlap
+            chunk_overlap=int(self.max_length * 0.1),  # 10% overlap
             separators=["\n\n", "\n", " ", ""],
         )
-        
+
         texts = splitter.split_text(markdown_content)
-        
+
         return [
             Chunk(
                 chunk_id=str(uuid.uuid4()),
