@@ -12,7 +12,8 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 from .base import Processor, ProcessingResult
 from ...ocr import parse_image_to_markdown
 from ...vision import VlmParser
-from ...shared.utils.converters import convert_ppt_slide_to_image
+from ...shared.utils.converters import convert_to_pdf
+import fitz  # PyMuPDF
 
 
 class PptxProcessor(Processor):
@@ -32,6 +33,7 @@ class PptxProcessor(Processor):
         slide_count = len(pres.slides)
         # placeholders for ordered markdown output
         slide_markdowns: List[str] = ["" for _ in range(slide_count)]
+        complex_slide_texts: dict[int, str] = {}
         complex_indices: List[int] = []
         image_count = 0
 
@@ -63,43 +65,77 @@ class PptxProcessor(Processor):
                         img_path.write_bytes(image.blob)
                         images.append(img_path)
 
-                # If a complex shape was found, the whole slide is complex
-                if is_complex_shape_found:
-                    complex_indices.append(idx)
-                    continue
-
                 slide_text = "\n".join(texts)
                 char_count = len(slide_text.replace("\n", "").strip())
 
-                # Rule 2: Slides with very little text are complex
-                if char_count < self.COMPLEX_THRESHOLD:
-                    complex_indices.append(idx)
-                else:
-                    # This is a content slide, process with fast path
-                    ocr_texts = [parse_image_to_markdown(
-                        str(p)) for p in images]
-                    if ocr_texts:
-                        slide_text = (
-                            slide_text + "\n\n" + "\n\n".join(ocr_texts)
-                        ).strip()
-                    slide_markdowns[idx] = slide_text
-                    image_count += len(images)
+                # Rule 2: Slides with very little text are also considered complex
+                is_complex = is_complex_shape_found or (char_count < self.COMPLEX_THRESHOLD)
 
-            # Deep path for complex slides
+                if is_complex:
+                    complex_indices.append(idx)
+                    # Store the extracted text for later merging
+                    complex_slide_texts[idx] = slide_text
+                    # We still process images on complex slides for OCR, just in case
+                    # VLM fails or for a more complete picture.
+
+                # All slides (simple and complex) can have images that need OCR
+                ocr_texts = [parse_image_to_markdown(str(p)) for p in images]
+                if ocr_texts:
+                    slide_text = (
+                        slide_text + "\n\n" + "\n\n".join(ocr_texts)
+                    ).strip()
+                
+                if not is_complex:
+                    # This is a content slide, process with fast path
+                    slide_markdowns[idx] = slide_text
+                
+                image_count += len(images)
+
+            # Deep path for complex slides, optimized for single conversion
             if complex_indices:
-                vlm = VlmParser()
-                for idx in complex_indices:
-                    try:
-                        img_path = convert_ppt_slide_to_image(
-                            ppt_path=path, slide_index=idx, output_dir=tmp
-                        )
-                        slide_markdowns[idx] = vlm.parse(img_path)
+                pdf_path = None
+                try:
+                    # Convert the entire PPTX to PDF once
+                    pdf_path = convert_to_pdf(input_path=path, output_dir=tmp)
+                    doc = fitz.open(str(pdf_path))
+                    vlm = VlmParser()
+
+                    for idx in complex_indices:
+                        if not (0 <= idx < len(doc)):
+                            slide_markdowns[idx] = f"> _[警告] 幻灯片索引 {idx + 1} 超出范围。_"
+                            continue
+                        
+                        page = doc.load_page(idx)
+                        pix = page.get_pixmap(dpi=200)
+                        img_path = tmp / f"complex_slide_{idx}.png"
+                        pix.save(str(img_path))
+                        
+                        vlm_markdown = vlm.parse(img_path)
+                        
+                        # Hybrid Parsing: Combine fast-path text with VLM analysis
+                        fast_path_text = complex_slide_texts.get(idx, "")
+                        
+                        # Combine results, ensuring no duplication if text is similar
+                        # A simple combination strategy for now:
+                        final_markdown = vlm_markdown
+                        if fast_path_text and fast_path_text not in vlm_markdown:
+                            final_markdown = f"{fast_path_text}\n\n{vlm_markdown}"
+                        
+                        slide_markdowns[idx] = final_markdown
                         image_count += 1
-                    except (RuntimeError, ValueError, FileNotFoundError) as e:
-                        slide_markdowns[idx] = (
-                            f"> _[提示] 第 {idx + 1} 页是一张复杂幻灯片，深度解析失败：{e}_\n"
-                            f"> _系统已回退并保留可提取的文本/图片。若因未安装 LibreOffice 导致，请安装并确保其在系统路径或 macOS 默认位置。_"
-                        )
+
+                    doc.close()
+
+                except (RuntimeError, FileNotFoundError) as e:
+                    # If conversion or parsing fails, provide a general message
+                    # and leave the complex slide markdown empty or with a notice.
+                    error_msg = (
+                        f"> _[提示] 深度解析失败: {e}_\n"
+                        f"> _请确保已正确安装 LibreOffice。_"
+                    )
+                    for idx in complex_indices:
+                        if not slide_markdowns[idx]: # Avoid overwriting fallback text
+                            slide_markdowns[idx] = error_msg
 
         markdown = "\n\n---\n\n".join(m for m in slide_markdowns if m)
         text_len = len(markdown.strip())

@@ -29,74 +29,49 @@ def _find_libreoffice_path() -> str | None:
 
 
 
-def convert_ppt_slide_to_image(
-    ppt_path: Path, slide_index: int, output_dir: Path
-) -> Path:
+def convert_to_pdf(input_path: Path, output_dir: Path) -> Path:
     """
-    将PPTX文件的特定幻灯片转换为PNG图像。
-
-    这个函数通过两个步骤完成转换：
-    1. PPTX -> PDF (使用 LibreOffice 的 headless 模式)
-    2. PDF page -> PNG (使用 PyMuPDF)
+    使用 LibreOffice 将文档转换为 PDF。
 
     Args:
-        ppt_path: PPTX文件的绝对路径。
-        slide_index: 要转换的幻灯片的0-based索引。
-        output_dir: 最终图像保存的目录。
+        input_path: 输入文件的绝对路径。
+        output_dir: 保存生成的 PDF 的目录。
 
     Returns:
-        生成的PNG图像的路径。
+        生成的 PDF 文件的路径。
 
     Raises:
-        RuntimeError: 如果 LibreOffice 未找到或失败，或者中间 PDF 未创建。
-        ValueError: 如果 slide_index 超出范围。
+        RuntimeError: 如果 LibreOffice 未找到或转换失败。
     """
-    with tempfile.TemporaryDirectory() as tmp_pdf_dir_str:
-        tmp_pdf_dir = Path(tmp_pdf_dir_str)
+    libreoffice_path = _find_libreoffice_path()
+    if not libreoffice_path:
+        raise RuntimeError(
+            "LibreOffice not found. Please install it and ensure it's in the system's PATH."
+        )
 
-        # Step 1: Convert PPTX to PDF using LibreOffice
-        try:
-            libreoffice_path = _find_libreoffice_path()
-            cmd = [
-                libreoffice_path,
-                "--headless",
-                "--convert-to",
-                "pdf",
-                "--outdir",
-                str(tmp_pdf_dir),
-                str(ppt_path),
-            ]
-            subprocess.run(
-                cmd, check=True, capture_output=True, text=True, timeout=120
-            )
-        except (
-            subprocess.CalledProcessError, 
-            FileNotFoundError, 
-            subprocess.TimeoutExpired
-        ) as e:
-            error_message = (
-                "PPTX to PDF conversion failed. Please ensure LibreOffice is installed "
-                f"and accessible in the system's PATH. Error: {e}"
-            )
-            raise RuntimeError(error_message) from e
+    try:
+        cmd = [
+            libreoffice_path,
+            "--headless",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            str(output_dir),
+            str(input_path),
+        ]
+        subprocess.run(
+            cmd, check=True, capture_output=True, text=True, timeout=120
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        error_message = (
+            f"Document to PDF conversion failed using LibreOffice. Error: {e.stderr or e}"
+        )
+        raise RuntimeError(error_message) from e
 
-        pdf_path = tmp_pdf_dir / f"{ppt_path.stem}.pdf"
-        if not pdf_path.exists():
-            raise RuntimeError(f"Conversion failed: PDF file not found at {pdf_path}")
+    expected_pdf_path = output_dir / f"{input_path.stem}.pdf"
+    if not expected_pdf_path.exists():
+        raise RuntimeError(
+            f"Conversion failed: PDF file not found at {expected_pdf_path}"
+        )
 
-        # Step 2: Extract the specific page as an image using PyMuPDF
-        doc = fitz.open(str(pdf_path))
-        if not (0 <= slide_index < len(doc)):
-            doc.close()
-            raise ValueError(
-                f"Slide index {slide_index} is out of bounds for document "
-                f"with {len(doc)} pages."
-            )
-
-        page = doc.load_page(slide_index)
-        pix = page.get_pixmap(dpi=200)  # Higher DPI for better quality
-        output_image_path = output_dir / f"complex_slide_{slide_index}.png"
-        pix.save(str(output_image_path))
-        doc.close()
-
-    return output_image_path
+    return expected_pdf_path

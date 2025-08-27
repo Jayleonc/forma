@@ -32,7 +32,7 @@ class LlmConfig:
 
 def get_vlm_config() -> VlmConfig:
     """Load VLM related configuration from environment variables."""
-    api_key = os.getenv("VLM_API_KEY") or os.getenv("FORMA_PAID_OPENAI_API_KEY")
+    api_key = os.getenv("VLM_API_KEY") or os.getenv("FORMA_OPENAI_API_KEY")
     if not api_key:
         raise ValueError(
             "API key not found. Please set VLM_API_KEY or FORMA_PAID_OPENAI_API_KEY."
@@ -48,7 +48,7 @@ def get_vlm_config() -> VlmConfig:
 
 def get_llm_config() -> LlmConfig:
     """Load LLM related configuration from environment variables."""
-    api_key = os.getenv("LLM_API_KEY") or os.getenv("FORMA_PAID_OPENAI_API_KEY")
+    api_key = os.getenv("LLM_API_KEY") or os.getenv("FORMA_OPENAI_API_KEY")
     if not api_key:
         raise ValueError(
             "API key not found. Please set LLM_API_KEY or FORMA_PAID_OPENAI_API_KEY."
