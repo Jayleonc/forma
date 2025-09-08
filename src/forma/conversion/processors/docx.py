@@ -72,11 +72,11 @@ class DocxProcessor(Processor):
 
 
     def _get_image_rids(self, p: Paragraph) -> list[str]:
-        """Get all relationship ids for images in a paragraph."""
+        """获取段落中的所有图片关系ID"""
         return p._p.xpath('.//a:blip/@r:embed')
 
     def _iter_block_items(self, parent):
-        """Yields each paragraph and table child within parent, in document order."""
+        """遍历文档中的所有段落和表格"""
 
         if isinstance(parent, DocumentObject):
             parent_elm = parent.element.body
@@ -96,7 +96,7 @@ class DocxProcessor(Processor):
         return text.replace("|", r"\|").replace("\n", "<br>")
 
     def _table_to_markdown(self, table: Table) -> str:
-        """Converts a docx Table object to a GFM Markdown table."""
+        """将 docx 表格转换为 GFM Markdown 表格"""
 
         rows_cells = []
         for row in table.rows:

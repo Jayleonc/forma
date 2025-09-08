@@ -56,7 +56,7 @@ def _get_ocr_engine() -> Any:
             from paddleocr import PaddleOCR  # imported lazily for optional dependency
 
             # Use default OCR pipeline for broad compatibility across versions
-            _OCR_ENGINE = PaddleOCR(show_log=False, use_gpu=(DEVICE == "cuda"))
+            _OCR_ENGINE = PaddleOCR(show_log=True, use_gpu=(DEVICE == "cuda"))
         except Exception:
             # Fallback to RapidOCR (onnxruntime) if PaddleOCR (and deps like cv2) are unavailable.
             class _RapidOCREngine:

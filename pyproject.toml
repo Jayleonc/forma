@@ -32,6 +32,9 @@ dependencies = [
   "pandas",
   "scikit-learn",
   "sentence-transformers",
+  "fastapi",
+  "uvicorn[standard]",
+  "python-multipart",
 ]
 
 [project.optional-dependencies]
