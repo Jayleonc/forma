@@ -16,6 +16,7 @@ from .conversion.workflow import run_conversion
 from .shared.custom_types import Strategy
 
 
+
 class ConvertRequest(BaseModel):
     request_id: str
     source_url: HttpUrl
@@ -37,8 +38,8 @@ class CallbackPayload(BaseModel):
 class ConversionTask(BaseModel):
     task_id: str
     request_id: str
-    source_url: str
-    callback_url: str
+    source_url: HttpUrl
+    callback_url: HttpUrl
 
 
 app = FastAPI()
@@ -83,37 +84,90 @@ async def process_task(task: ConversionTask, client: httpx.AsyncClient) -> None:
     """Download, convert and callback the result."""
 
     callback = CallbackPayload(request_id=task.request_id, status="failed")
+    input_path = None
     try:
+        # Log task received
+        print(f"[DEBUG] Task received: {task.task_id}, request_id: {task.request_id}, source_url: {task.source_url}")
+        
         with tempfile.TemporaryDirectory() as temp_dir_str:
             temp_dir = Path(temp_dir_str)
-            input_path = temp_dir / "input"
+            
+            # 从URL中提取文件名和后缀
+            url_path = Path(str(task.source_url))
+            original_filename = url_path.name
+            
+            # 解码URL编码的文件名
+            from urllib.parse import unquote
+            decoded_filename = unquote(original_filename)
+            print(f"[DEBUG] Original filename: {decoded_filename}")
+            
+            # 保留原始文件后缀
+            input_path = temp_dir / decoded_filename
+            
+            # Download file
+            try:
+                url = str(task.source_url)
+                print(f"[DEBUG] Attempting to download file from URL: {url}")
+                
+                resp = await client.get(url)
+                resp.raise_for_status()
+                input_path.write_bytes(resp.content)
+                print(f"[DEBUG] File download successful. Size: {len(resp.content)} bytes, saved to: {input_path}")
+                print(f"[DEBUG] File extension: {input_path.suffix}")
 
-            resp = await client.get(task.source_url)
-            resp.raise_for_status()
-            input_path.write_bytes(resp.content)
+            except Exception as download_exc:
+                print(f"[ERROR] File download failed: {download_exc}")
+                raise RuntimeError(f"Failed to download file: {download_exc}") from download_exc
 
             output_dir = temp_dir / "output"
             output_dir.mkdir()
 
-            run_conversion(
-                inputs=[input_path],
-                output_dir=output_dir,
-                strategy=Strategy.AUTO,
-                recursive=False,
-            )
+            # Run conversion
+            try:
+                print(f"[DEBUG] About to start conversion process for file: {input_path}")
+                run_conversion(
+                    inputs=[input_path],
+                    output_dir=output_dir,
+                    strategy=Strategy.AUTO,
+                    recursive=False,
+                )
+                print(f"[DEBUG] Conversion completed successfully")
+            except Exception as conv_exc:
+                print(f"[ERROR] Conversion engine error: {conv_exc}")
+                raise RuntimeError(f"Conversion engine error: {conv_exc}") from conv_exc
 
+            # Check output
+            print(f"[DEBUG] Checking for output files in {output_dir}")
             output_files = list(output_dir.glob("*.md"))
             if not output_files:
-                raise RuntimeError("Conversion produced no output")
+                # 直接抛出异常，不创建 fallback 文件
+                file_name = Path(str(task.source_url)).name
+                print(f"[ERROR] No output files found for {file_name}")
+                raise RuntimeError(f"Conversion produced no output for file: {file_name}")
+            
+            print(f"[DEBUG] Found {len(output_files)} output files. Reading first file: {output_files[0]}")
             markdown = output_files[0].read_text(encoding="utf-8")
             callback.status = "completed"
             callback.markdown_content = markdown
-    except Exception as exc:  # pragma: no cover - best effort logging
-        callback.error_message = str(exc)
+            print(f"[DEBUG] Successfully read markdown content, length: {len(markdown)} characters")
+    except Exception as exc:
+        # Capture detailed error information
+        import traceback
+        tb_str = traceback.format_exc(limit=5)
+        file_info = f"File: {Path(str(task.source_url)).name}" if input_path else "Unknown file"
+        callback.error_message = f"{file_info} - {exc.__class__.__name__}: {exc}\n{tb_str}"
+        print(f"[ERROR] Task processing failed: {exc.__class__.__name__}: {exc}")
     finally:
         try:
-            await client.post(task.callback_url, json=callback.model_dump())
-        except httpx.HTTPError:
-            pass
+            callback_url = str(task.callback_url)
+            print(f"[DEBUG] Sending callback to {callback_url}, status: {callback.status}")
+            
+            await client.post(callback_url, json=callback.model_dump())
+            print(f"[DEBUG] Callback sent successfully")
+        except httpx.HTTPError as http_exc:
+            # Log callback failure without affecting main flow
+            print(f"[ERROR] Callback failed: {http_exc}")
+            print(f"[DEBUG] Callback payload: {callback.model_dump()}")
+
 
 

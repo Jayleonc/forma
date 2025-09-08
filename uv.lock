@@ -523,6 +523,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "langchain" },
     { name = "langchain-openai" },
     { name = "mammoth" },
@@ -568,6 +569,7 @@ gpu = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "ipython", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "langchain" },
     { name = "langchain-openai" },

@@ -98,14 +98,60 @@ def _discover_files(inputs: List[Path], recursive: bool) -> List[Path]:
 
 def _select_processor(path: Path, vlm_client: VLMClient | None) -> Processor | None:
     suffix = path.suffix.lower()
+    print(f"[DEBUG] Selecting processor for file: {path}, suffix: {suffix}")
+    
+    # 基于文件后缀名选择处理器
     if suffix == ".pdf":
+        print(f"[DEBUG] Selected PdfProcessor for {path} based on suffix")
         return PdfProcessor()
     if suffix in {".png", ".jpg", ".jpeg", ".bmp"}:
+        print(f"[DEBUG] Selected ImageProcessor for {path} based on suffix")
         return ImageProcessor()
     if suffix == ".docx":
+        print(f"[DEBUG] Selected DocxProcessor for {path} based on suffix")
         return DocxProcessor(vlm_client=vlm_client)
     if suffix == ".pptx":
+        print(f"[DEBUG] Selected PptxProcessor for {path} based on suffix")
         return PptxProcessor()
+    
+    # 如果没有后缀名或后缀名不匹配，尝试基于文件内容检测类型
+    print(f"[INFO] Attempting to detect file type based on content for: {path}")
+    try:
+        # 读取文件头部字节用于检测文件类型
+        with open(path, 'rb') as f:
+            header = f.read(8)  # 读取前8个字节
+        
+        # PDF文件头部特征: %PDF
+        if header.startswith(b'%PDF'):
+            print(f"[DEBUG] Detected PDF file based on content signature for {path}")
+            return PdfProcessor()
+        
+        # DOCX文件头部特征: PK (ZIP格式)
+        elif header.startswith(b'PK'):
+            # 这可能是DOCX或PPTX (都是ZIP格式)
+            # 进一步检查文件大小和其他特征可以区分它们
+            # 这里简单地假设它是DOCX
+            print(f"[DEBUG] Detected Office document (possibly DOCX/PPTX) based on content signature for {path}")
+            return DocxProcessor(vlm_client=vlm_client)
+        
+        # 图像文件头部特征
+        elif header.startswith(b'\xff\xd8'):  # JPEG
+            print(f"[DEBUG] Detected JPEG image based on content signature for {path}")
+            return ImageProcessor()
+        elif header.startswith(b'\x89PNG'):  # PNG
+            print(f"[DEBUG] Detected PNG image based on content signature for {path}")
+            return ImageProcessor()
+        elif header.startswith(b'GIF8'):  # GIF
+            print(f"[DEBUG] Detected GIF image based on content signature for {path}")
+            return ImageProcessor()
+        elif header.startswith(b'BM'):  # BMP
+            print(f"[DEBUG] Detected BMP image based on content signature for {path}")
+            return ImageProcessor()
+    
+    except Exception as e:
+        print(f"[ERROR] Error during file type detection: {e.__class__.__name__}: {e}")
+    
+    print(f"[WARNING] No processor found for file: {path} with suffix: {suffix}")
     return None
 
 
@@ -118,37 +164,60 @@ def _process_single_file(
     prompt_name: str = "default_image_description",
     output_name: str | None = None,
 ) -> None:
+    print(f"[DEBUG] Processing file: {path}, strategy: {strategy}")
     processor = _select_processor(path, vlm_client)
     if processor is None:
+        print(f"[ERROR] No suitable processor found for {path}, skipping file")
         return
 
+    print(f"[DEBUG] Using processor: {processor.__class__.__name__}")
     stem = output_name if output_name else path.stem
     output_path = output_dir / f"{stem}.md"
+    print(f"[DEBUG] Output will be written to: {output_path}")
+
 
     # For AUTO mode on images, prefer deep strategy directly.
     if strategy == Strategy.AUTO and isinstance(processor, ImageProcessor):
+        print(f"[DEBUG] AUTO strategy for image file, using deep processing directly")
         if not vlm_parser:
+            print(f"[DEBUG] Creating VlmParser for image processing")
             vlm_parser = VlmParser(vlm_client)
+        print(f"[DEBUG] Parsing image with VLM: {path}")
         markdown = vlm_parser.parse(path, prompt_name=prompt_name)
+        print(f"[DEBUG] Writing VLM result to {output_path}, content length: {len(markdown)}")
         output_path.write_text(markdown, encoding="utf-8")
         return
 
     if strategy == Strategy.DEEP:
+        print(f"[DEBUG] Using DEEP strategy for {path}")
         if not vlm_parser:
+            print(f"[DEBUG] Creating VlmParser for deep processing")
             vlm_parser = VlmParser(vlm_client)
+        print(f"[DEBUG] Parsing file with VLM: {path}")
         markdown = vlm_parser.parse(path, prompt_name=prompt_name)
+        print(f"[DEBUG] Writing VLM result to {output_path}, content length: {len(markdown)}")
         output_path.write_text(markdown, encoding="utf-8")
         return
 
-    result: ProcessingResult = processor.process(path)
-    final_md = result.markdown_content
+    print(f"[DEBUG] Using standard processor for {path}: {processor.__class__.__name__}")
+    try:
+        result: ProcessingResult = processor.process(path)
+        print(f"[DEBUG] Processing completed, text length: {result.text_char_count}, low confidence: {result.low_confidence}")
+        final_md = result.markdown_content
 
-    # For AUTO mode on other file types, use confidence score to decide.
-    if strategy == Strategy.AUTO and (
-        result.low_confidence or result.text_char_count < THRESHOLD
-    ):
-        if not vlm_parser:
-            vlm_parser = VlmParser(vlm_client)
-        final_md = vlm_parser.parse(path, prompt_name=prompt_name)
+        # For AUTO mode on other file types, use confidence score to decide.
+        if strategy == Strategy.AUTO and (
+            result.low_confidence or result.text_char_count < THRESHOLD
+        ):
+            print(f"[DEBUG] Low confidence or text below threshold ({result.text_char_count} < {THRESHOLD}), using VLM")
+            if not vlm_parser:
+                print(f"[DEBUG] Creating VlmParser for fallback processing")
+                vlm_parser = VlmParser(vlm_client)
+            print(f"[DEBUG] Parsing with VLM as fallback: {path}")
+            final_md = vlm_parser.parse(path, prompt_name=prompt_name)
 
-    output_path.write_text(final_md, encoding="utf-8")
+        print(f"[DEBUG] Writing final result to {output_path}, content length: {len(final_md)}")
+        output_path.write_text(final_md, encoding="utf-8")
+    except Exception as e:
+        print(f"[ERROR] Error processing file {path}: {e.__class__.__name__}: {e}")
+        raise
