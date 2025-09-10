@@ -8,19 +8,25 @@ import uuid
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, status
-from pydantic import BaseModel, HttpUrl
+from fastapi import FastAPI, status, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, AnyHttpUrl, Field, ConfigDict
 import contextlib
 
 from .conversion.workflow import run_conversion
 from .shared.custom_types import Strategy
+from .shared.utils.markdown_cleaner import MarkdownCleaner
 
 
 
 class ConvertRequest(BaseModel):
-    request_id: str
-    source_url: HttpUrl
-    callback_url: HttpUrl
+    # Canonicalize to job_id as external and internal name
+    model_config = ConfigDict(populate_by_name=True)
+
+    job_id: str
+    source_url: AnyHttpUrl
+    callback_url: AnyHttpUrl
 
 
 class ConvertResponse(BaseModel):
@@ -29,7 +35,10 @@ class ConvertResponse(BaseModel):
 
 
 class CallbackPayload(BaseModel):
-    request_id: str
+    # Output uses camelCase key `jobId` for the callback payload
+    model_config = ConfigDict(populate_by_name=True)
+
+    job_id: str 
     status: str
     markdown_content: str | None = None
     error_message: str | None = None
@@ -37,13 +46,27 @@ class CallbackPayload(BaseModel):
 
 class ConversionTask(BaseModel):
     task_id: str
-    request_id: str
-    source_url: HttpUrl
-    callback_url: HttpUrl
+    job_id: str
+    source_url: AnyHttpUrl
+    callback_url: AnyHttpUrl
 
 
 app = FastAPI()
 queue: asyncio.Queue[ConversionTask] = asyncio.Queue()
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Log detailed request validation errors to aid debugging 422 issues."""
+    try:
+        body = await request.body()
+    except Exception:
+        body = b""
+    print("[ERROR] Request validation failed:", exc.errors())
+    # Body may be bytes; limit size to avoid noisy logs
+    preview = body[:2048]
+    print(f"[DEBUG] Raw request body preview (up to 2KB): {preview!r}")
+    return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": exc.errors()})
 
 
 @app.on_event("startup")
@@ -83,11 +106,11 @@ async def worker() -> None:
 async def process_task(task: ConversionTask, client: httpx.AsyncClient) -> None:
     """Download, convert and callback the result."""
 
-    callback = CallbackPayload(request_id=task.request_id, status="failed")
+    callback = CallbackPayload(job_id=task.job_id, status="failed")
     input_path = None
     try:
         # Log task received
-        print(f"[DEBUG] Task received: {task.task_id}, request_id: {task.request_id}, source_url: {task.source_url}")
+        print(f"[DEBUG] Task received: {task.task_id}, job_id: {task.job_id}, source_url: {task.source_url}")
         
         with tempfile.TemporaryDirectory() as temp_dir_str:
             temp_dir = Path(temp_dir_str)
@@ -147,6 +170,8 @@ async def process_task(task: ConversionTask, client: httpx.AsyncClient) -> None:
             
             print(f"[DEBUG] Found {len(output_files)} output files. Reading first file: {output_files[0]}")
             markdown = output_files[0].read_text(encoding="utf-8")
+            # 注意: 这里不需要再次清洗Markdown内容
+            # 因为workflow.py中已经在所有输出路径应用了MarkdownCleaner.clean_markdown()
             callback.status = "completed"
             callback.markdown_content = markdown
             print(f"[DEBUG] Successfully read markdown content, length: {len(markdown)} characters")
@@ -161,9 +186,11 @@ async def process_task(task: ConversionTask, client: httpx.AsyncClient) -> None:
         try:
             callback_url = str(task.callback_url)
             print(f"[DEBUG] Sending callback to {callback_url}, status: {callback.status}")
-            
-            await client.post(callback_url, json=callback.model_dump())
-            print(f"[DEBUG] Callback sent successfully")
+
+            # Send jobId (camelCase) as required by the Go callback API
+            payload = callback.model_dump(by_alias=True)
+            await client.post(callback_url, json=payload)
+            print(f"[DEBUG] Callback sent successfully with keys: {list(payload.keys())}")
         except httpx.HTTPError as http_exc:
             # Log callback failure without affecting main flow
             print(f"[ERROR] Callback failed: {http_exc}")

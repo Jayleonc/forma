@@ -20,6 +20,7 @@ from .processors import (
     ProcessingResult,
 )
 from ..shared.config import get_vlm_config
+from ..shared.utils.markdown_cleaner import MarkdownCleaner
 
 THRESHOLD = get_vlm_config().auto_threshold
 
@@ -184,8 +185,10 @@ def _process_single_file(
             vlm_parser = VlmParser(vlm_client)
         print(f"[DEBUG] Parsing image with VLM: {path}")
         markdown = vlm_parser.parse(path, prompt_name=prompt_name)
-        print(f"[DEBUG] Writing VLM result to {output_path}, content length: {len(markdown)}")
-        output_path.write_text(markdown, encoding="utf-8")
+        # 应用Markdown清洗
+        cleaned_markdown = MarkdownCleaner.clean_markdown(markdown)
+        print(f"[DEBUG] Writing cleaned VLM result to {output_path}, content length: {len(cleaned_markdown)}")
+        output_path.write_text(cleaned_markdown, encoding="utf-8")
         return
 
     if strategy == Strategy.DEEP:
@@ -195,8 +198,10 @@ def _process_single_file(
             vlm_parser = VlmParser(vlm_client)
         print(f"[DEBUG] Parsing file with VLM: {path}")
         markdown = vlm_parser.parse(path, prompt_name=prompt_name)
-        print(f"[DEBUG] Writing VLM result to {output_path}, content length: {len(markdown)}")
-        output_path.write_text(markdown, encoding="utf-8")
+        # 应用Markdown清洗
+        cleaned_markdown = MarkdownCleaner.clean_markdown(markdown)
+        print(f"[DEBUG] Writing cleaned VLM result to {output_path}, content length: {len(cleaned_markdown)}")
+        output_path.write_text(cleaned_markdown, encoding="utf-8")
         return
 
     print(f"[DEBUG] Using standard processor for {path}: {processor.__class__.__name__}")
@@ -216,8 +221,10 @@ def _process_single_file(
             print(f"[DEBUG] Parsing with VLM as fallback: {path}")
             final_md = vlm_parser.parse(path, prompt_name=prompt_name)
 
-        print(f"[DEBUG] Writing final result to {output_path}, content length: {len(final_md)}")
-        output_path.write_text(final_md, encoding="utf-8")
+        # 应用Markdown清洗
+        cleaned_final_md = MarkdownCleaner.clean_markdown(final_md)
+        print(f"[DEBUG] Writing cleaned final result to {output_path}, content length: {len(cleaned_final_md)}")
+        output_path.write_text(cleaned_final_md, encoding="utf-8")
     except Exception as e:
         print(f"[ERROR] Error processing file {path}: {e.__class__.__name__}: {e}")
         raise
