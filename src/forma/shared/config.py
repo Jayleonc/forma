@@ -43,10 +43,10 @@ class LlmConfig:
 def get_vlm_config() -> VlmConfig:
     """Load VLM related configuration from environment variables."""
     api_key = os.getenv("VLM_API_KEY") or os.getenv(
-        "FORMA_OPENAI_API_KEY")
+        "FORMA_PAID_OPENAI_API_KEY")
     if not api_key:
         raise ValueError(
-            "API key not found. Please set VLM_API_KEY or FORMA_OPENAI_API_KEY."
+            "API key not found. Please set VLM_API_KEY or FORMA_PAID_OPENAI_API_KEY."
         )
 
     return VlmConfig(
@@ -61,10 +61,10 @@ def get_ocr_config() -> OcrConfig:
     """Load OCR related configuration from environment variables."""
     # 使用与VLM相同的API密钥配置
     api_key = os.getenv("OCR_API_KEY") or os.getenv(
-        "VLM_API_KEY") or os.getenv("FORMA_OPENAI_API_KEY")
+        "FORMA_PAID_OPENAI_API_KEY")
     if not api_key:
         raise ValueError(
-            "API key not found. Please set OCR_API_KEY, VLM_API_KEY or FORMA_OPENAI_API_KEY."
+            "API key not found. Please set OCR_API_KEY or FORMA_PAID_OPENAI_API_KEY."
         )
 
     # 默认使用GOT-OCR2_0模型
@@ -80,16 +80,16 @@ def get_ocr_config() -> OcrConfig:
 def get_llm_config() -> LlmConfig:
     """Load LLM related configuration from environment variables."""
     api_key = os.getenv("LLM_API_KEY") or os.getenv(
-        "FORMA_OPENAI_API_KEY")
+        "FORMA_PAID_OPENAI_API_KEY")
     if not api_key:
         raise ValueError(
-            "API key not found. Please set LLM_API_KEY or FORMA_OPENAI_API_KEY."
+            "API key not found. Please set LLM_API_KEY or FORMA_PAID_OPENAI_API_KEY."
         )
 
     return LlmConfig(
         api_key=api_key,
-        # model=os.getenv("LLM_MODEL", "Qwen3-32B"),
-        model="Qwen2.5-72B-Instruct",
+        # 从环境变量读取模型名称，默认使用更小更快的模型
+        model=os.getenv("LLM_MODEL", "Qwen2.5-72B-Instruct"),
         base_url=os.getenv("LLM_BASE_URL") or os.getenv("FORMA_BASE_URL"),
     )
 

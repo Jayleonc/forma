@@ -195,27 +195,31 @@ def _process_single_file(
     output_path = output_dir / f"{stem}.md"
     print(f"[DEBUG] Output will be written to: {output_path}")
 
-    # For AUTO mode on images, prefer deep strategy directly.
-    if strategy == Strategy.AUTO and isinstance(processor, ImageProcessor):
-        print(f"[DEBUG] AUTO strategy for image file, using deep processing directly")
-        if not vlm_parser:
-            print(f"[DEBUG] Creating VlmParser for image processing")
+    # 图片文件统一由处理器内部根据策略决定使用 VLM 还是 OCR，
+    # workflow 只做业务聚合（清洗与落盘）。
+    if isinstance(processor, ImageProcessor):
+        print(f"[DEBUG] ImageProcessor will decide path by strategy: {strategy}")
+        # 对于 AUTO/DEEP，若未提供 vlm_parser，这里创建一个以便传入处理器
+        if strategy in (Strategy.AUTO, Strategy.DEEP) and not vlm_parser:
+            print(f"[DEBUG] Creating VlmParser for image processing (strategy={strategy})")
             vlm_parser = VlmParser(vlm_client)
-        print(f"[DEBUG] Parsing image with VLM: {path}")
-        markdown = vlm_parser.parse(path, prompt_name=prompt_name)
-        # 应用Markdown清洗
+        markdown = processor.process_with_strategy(
+            path, strategy, vlm_parser, prompt_name=prompt_name
+        )
         cleaned_markdown = MarkdownCleaner.clean_markdown(markdown)
         print(
-            f"[DEBUG] Writing cleaned VLM result to {output_path}, content length: {len(cleaned_markdown)}")
+            f"[DEBUG] Writing cleaned image result to {output_path}, content length: {len(cleaned_markdown)}")
         output_path.write_text(cleaned_markdown, encoding="utf-8")
         return
 
+    # TODO 这里可以优化，非图片的DEEP，直接走VLM，是不是不对呢。。。。
     if strategy == Strategy.DEEP:
         print(f"[DEBUG] Using DEEP strategy for {path}")
         if not vlm_parser:
             print(f"[DEBUG] Creating VlmParser for deep processing")
             vlm_parser = VlmParser(vlm_client)
         print(f"[DEBUG] Parsing file with VLM: {path}")
+        # 非图片类型在 DEEP 策略下走通用 VLM 解析
         markdown = vlm_parser.parse(path, prompt_name=prompt_name)
         # 应用Markdown清洗
         cleaned_markdown = MarkdownCleaner.clean_markdown(markdown)

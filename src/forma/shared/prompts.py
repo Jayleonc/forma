@@ -38,6 +38,14 @@ class PromptManager:
     _ALLOWED_VARS_MAP = {
         "knowledge_distillation_prompt": {"chunk_text", "format_instructions"},
         "global_knowledge_synthesis_prompt": {"enriched_chunks", "format_instructions"},
+        # Allow variables for hierarchical prompt so placeholders are substituted correctly
+        "hierarchical_knowledge_distillation_prompt": {
+            "chunk_text",
+            "header_chain",
+            "parent_summary",
+            "preferred_language_instruction",
+            "format_instructions",
+        },
     }
 
     _instance: "PromptManager | None" = None

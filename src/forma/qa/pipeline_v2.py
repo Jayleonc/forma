@@ -14,7 +14,7 @@ import pandas as pd
 from rich.console import Console
 from rich.panel import Panel
 
-from ..shared.chunker import HierarchicalChunker
+from ..shared.chunker_v2 import HierarchicalChunkerV2
 from .builder_v2 import HierarchicalKnowledgeBuilder
 
 
@@ -39,9 +39,29 @@ def run_knowledge_pipeline(
 
     # Stage 2: Chunking content
     console.print(Panel("Stage 2/4: Chunking content", title="[bold cyan]Pipeline Status[/bold cyan]", expand=False))
-    chunker = HierarchicalChunker(source_filename=str(input_path))
+    chunker = HierarchicalChunkerV2(source_filename=str(input_path))
     chunks = chunker.chunk(content)
     console.print(f"  -> Found {len(chunks)} chunks.")
+    # Persist chunks for inspection
+    base_name = output_name or input_path.stem
+    chunks_path = output_dir / f"{base_name}_chunks.jsonl"
+    try:
+        with chunks_path.open("w", encoding="utf-8") as f:
+            for ch in chunks:
+                f.write(
+                    json.dumps(
+                        {
+                            "chunk_id": ch.chunk_id,
+                            "text": ch.text,
+                            "metadata": ch.metadata,
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+        console.print(f"  -> Chunks saved to: {chunks_path}")
+    except Exception as e:
+        console.print(f"  -> [red]Failed to save chunks[/red]: {e}")
     current_time = time.time()
     console.print(f"  -> Done in {current_time - last_stage_time:.2f}s\n")
     last_stage_time = current_time
