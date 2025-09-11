@@ -140,6 +140,34 @@ def generate_qa(
     console.print(f"✅ 知识库构建完成，结果已保存至 {output_dir}")
 
 
+@app.command(
+    "qa-v2", help="从 Markdown 文档构建分层的 RAG 知识库 (.jsonl) [层级提炼版]",
+)
+def generate_qa_v2(
+    input_path: Path = typer.Argument(
+        ..., exists=True, file_okay=True, dir_okay=False, readable=True, resolve_path=True, help="输入的 Markdown 文件路径。",
+    ),
+    output_dir: Path = typer.Option(
+        ..., "-o", "--output", help="用于保存输出 JSONL 文件的目录。", file_okay=False, dir_okay=True, writable=True, resolve_path=True,
+    ),
+    name: str | None = typer.Option(
+        None, "-n", "--name", help="输出文件的基准名称（不包含扩展名）。若未提供，则使用输入文件名。",
+    ),
+    export_csv: bool = typer.Option(
+        False,
+        "--export-csv",
+        help="Additionally export a flattened CSV file (question, answer, category).",
+        show_default=False,
+    ),
+) -> None:
+    """从Markdown文档构建层级感知的知识库并保存为JSONL文件。"""
+
+    from forma.qa.pipeline_v2 import run_knowledge_pipeline
+
+    run_knowledge_pipeline(input_path, output_dir, export_csv=export_csv, output_name=name)
+    console.print(f"✅ (v2) 知识库构建完成，结果已保存至 {output_dir}")
+
+
 def _process_single_file(input_path: Path, output_dir: Path) -> tuple[str, int, Path]:
     """Worker helper to build knowledge for a single markdown file."""
     from forma.qa.pipeline import run_knowledge_pipeline
