@@ -18,23 +18,23 @@ class HierarchicalChunker:
 
     def chunk(self, markdown_content: str) -> List[Chunk]:
         """Chunk markdown content using a hierarchical strategy."""
-        # Strategy 1: Chunk by standard Markdown headers
+        # 策略1：按标准Markdown标题分块
         md_chunks = self._chunk_by_markdown_headers(markdown_content)
         if md_chunks:
             return md_chunks
 
-        # Strategy 2: Chunk by semantic markdown splitting (handles bold headers etc.)
+        # 策略2：按语义Markdown分块
         semantic_chunks = self._chunk_by_semantic_markdown_splitter(
             markdown_content)
         if semantic_chunks:
             return semantic_chunks
 
-        # Strategy 3: Chunk by common non-standard headers (e.g., '一、', '1.')
+        # 策略3：按常见非标准标题分块（如'一、', '1.'等）
         regex_chunks = self._chunk_by_regex_headers(markdown_content)
         if regex_chunks:
             return regex_chunks
 
-        # Strategy 4: Fallback to recursive character splitting for unstructured text
+        # 策略4：回退到递归字符分割处理未结构化文本
         return self._chunk_by_fallback_splitter(markdown_content)
 
     def _chunk_by_markdown_headers(self, markdown_content: str) -> List[Chunk]:
@@ -68,8 +68,8 @@ class HierarchicalChunker:
 
     def _chunk_by_semantic_markdown_splitter(self, markdown_content: str) -> List[Chunk]:
         """Attempts to chunk by semantic markdown separators like bolded headers."""
-        # Separators are ordered from most specific to most general.
-        # This handles documents that use bold text for headers.
+        # 分隔符按从最具体到最一般的顺序排列
+        # 这处理使用粗体文本作为标题的文档
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.max_length,
             chunk_overlap=int(self.max_length * 0.1),
@@ -78,7 +78,7 @@ class HierarchicalChunker:
 
         texts = splitter.split_text(markdown_content)
 
-        # If it only results in one chunk, it's likely not a good split.
+        # 如果只生成一个块，很可能不是好的分块
         if len(texts) <= 1:
             return []
 
@@ -93,7 +93,7 @@ class HierarchicalChunker:
 
     def _chunk_by_regex_headers(self, markdown_content: str) -> List[Chunk]:
         """Attempts to chunk by common patterns like '一、', '(一)', '1.' etc."""
-        # Enhanced regex to capture more non-standard headers, including Chinese numerals
+        # 增强正则表达式以捕获更多非标准标题，包括中文数字
         regex_patterns = [
             r"^第[一二三四五六七八九十百千万]+章.*",  # e.g., 第一章 Title
             r"^第[一二三四五六七八九十百千万]+节.*",  # e.g., 第一节 Title
@@ -105,11 +105,11 @@ class HierarchicalChunker:
         pattern = re.compile(combined_regex, re.MULTILINE)
         matches = list(pattern.finditer(markdown_content))
 
-        if len(matches) < 2:  # Not enough sections to be considered structured
+        if len(matches) < 2:  # 不足两个部分，不认为是结构化的
             return []
 
         chunks = []
-        # Add the text before the first header as a chunk
+        # 添加第一个标题前的文本作为块
         first_match_start = matches[0].start()
         if first_match_start > 0:
             leading_text = markdown_content[:first_match_start].strip()
@@ -135,7 +135,7 @@ class HierarchicalChunker:
         if not markdown_content.strip():
             return []
 
-        # This is the most basic splitter for unstructured text.
+        # 这是最基本的分割器，用于未结构化文本
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.max_length,
             chunk_overlap=int(self.max_length * 0.1),  # 10% overlap
@@ -160,7 +160,7 @@ class HierarchicalChunker:
         parent_id: str | None,
         header_chain: List[str],
     ) -> List[Chunk]:
-        """Helper to recursively split markdown content by header and then by paragraph if needed."""
+        """递归分割Markdown内容，先按标题，再按段落分割"""
         if level > 6:
             return []
 
@@ -175,11 +175,11 @@ class HierarchicalChunker:
             current_header_chain = header_chain + [header]
             header_chunk_id = str(uuid.uuid4())
 
-            # Recursively find all chunks from sub-headers (level+1 and deeper)
+            # 递归找到所有子标题块
             sub_header_chunks = self._recursive_chunk(
                 body, level + 1, header_chunk_id, current_header_chain)
 
-            # Isolate the text that belongs directly to the current header
+            # 隔离直接属于当前标题的文本
             first_sub_header_start = -1
             for l in range(level + 1, 7):
                 pattern = re.compile(rf"^{'#'*l} (.+)", re.MULTILINE)
@@ -190,7 +190,7 @@ class HierarchicalChunker:
             text_only = body[:first_sub_header_start].strip(
             ) if first_sub_header_start != -1 else body.strip()
 
-            # Create the main chunk for the current header
+            # 创建当前标题的主块
             header_chunk = Chunk(
                 chunk_id=header_chunk_id,
                 text=f"{'#' * level} {header}",
@@ -198,25 +198,25 @@ class HierarchicalChunker:
                     parent_id, current_header_chain),
             )
 
-            # Add the header chunk itself. It acts as a container.
+            # 添加标题块本身。它充当容器。
             all_chunks.append(header_chunk)
             sibling_header_chunks.append(header_chunk)
 
-            # If there's text, decide whether to split it or merge it.
+            # 如果有文本，决定是分割还是合并。
             if text_only:
                 if len(text_only) > self.max_length:
-                    # Text is too long, apply intelligent paragraph splitting.
+                    # 文本过长，应用智能段落分割。
                     paragraph_chunks = self._split_text_intelligently(
                         text_only, header_chunk_id, current_header_chain)
                     all_chunks.extend(paragraph_chunks)
                 else:
-                    # Text is not too long, so merge it into the header chunk.
+                    # 文本不长，所以合并到标题块。
                     header_chunk.text += f"\n{text_only}"
 
-            # Add chunks from sub-headers
+            # 添加子标题块
             all_chunks.extend(sub_header_chunks)
 
-        # Link header chunks at the current level as siblings
+        # 将当前级别的标题块链接为兄弟
         sibling_ids = [c.chunk_id for c in sibling_header_chunks]
         for c in sibling_header_chunks:
             c.metadata["sibling_ids"] = [
@@ -227,7 +227,7 @@ class HierarchicalChunker:
     def _split_text_intelligently(
         self, text: str, parent_id: str, header_chain: List[str]
     ) -> List[Chunk]:
-        """Splits a block of text by paragraphs, grouping them into chunks under max_length."""
+        """按段落分割文本，将它们分组到不超过max_length的块中。"""
         paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
 
         all_sub_chunks: List[Chunk] = []
@@ -236,13 +236,13 @@ class HierarchicalChunker:
 
         for para in paragraphs:
             para_len = len(para)
-            # Check if adding the next paragraph would exceed the limit.
-            # If the current chunk is empty, we must add the paragraph regardless of its size.
+            # 检查添加下一段是否会超过限制。
+            # 如果当前块为空，我们必须添加段落，不管它的大小如何。
             if not current_chunk_paragraphs or (current_chunk_size + para_len + 2) <= self.max_length:
                 current_chunk_paragraphs.append(para)
                 current_chunk_size += para_len + 2  # +2 for newline characters
             else:
-                # Seal the current chunk.
+                # 封印当前块。
                 chunk_text = "\n\n".join(current_chunk_paragraphs)
                 sub_chunk = Chunk(
                     chunk_id=str(uuid.uuid4()),
@@ -251,11 +251,11 @@ class HierarchicalChunker:
                 )
                 all_sub_chunks.append(sub_chunk)
 
-                # Start a new chunk with the current paragraph.
+                # 开始一个新块，当前段落。
                 current_chunk_paragraphs = [para]
                 current_chunk_size = para_len
 
-        # Seal the last chunk.
+        # 封印最后一个块。
         if current_chunk_paragraphs:
             chunk_text = "\n\n".join(current_chunk_paragraphs)
             sub_chunk = Chunk(
@@ -265,7 +265,7 @@ class HierarchicalChunker:
             )
             all_sub_chunks.append(sub_chunk)
 
-        # Link the created sub-chunks as siblings.
+        # 将创建的子块链接为兄弟。
         sibling_ids = [c.chunk_id for c in all_sub_chunks]
         for c in all_sub_chunks:
             c.metadata["sibling_ids"] = [

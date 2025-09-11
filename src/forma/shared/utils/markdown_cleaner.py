@@ -55,4 +55,22 @@ class MarkdownCleaner:
         # 步骤7: 删除文档末尾的空行
         content = re.sub(r'\n\s*$', '\n', content)
         
+        # 步骤8: 清理文末连续的图片描述（image desc）块
+        # 如果文档末尾仅包含若干行形如 "> **image desc N**: ..." 的描述，将这些尾部块整体去除
+        content = re.sub(r'(?:\n?\s*> \*\*image desc\s+\d+\*\*:[^\n]*\n?\s*)+\Z', '\n', content, flags=re.IGNORECASE)
+        
+        # 步骤9: 移除无信息量的图片描述行（过短/噪声）
+        def _filter_line(line: str) -> str:
+            m = re.match(r'^(\s*> \*\*image desc\s+\d+\*\*:\s*)(.*)$', line, flags=re.IGNORECASE)
+            if not m:
+                return line
+            desc = m.group(2).strip()
+            # 过短的内容直接移除，例如只有 1-4 个字符（如 "-", "1", "ME" 等）
+            if len(desc) < 5:
+                return ''
+            return line
+        lines = content.splitlines()
+        lines = [ln for ln in (_filter_line(ln) for ln in lines) if ln != '']
+        content = "\n".join(lines) + ("\n" if content.endswith("\n") else "")
+        
         return content

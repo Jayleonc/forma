@@ -153,6 +153,7 @@ async def process_task(task: ConversionTask, client: httpx.AsyncClient) -> None:
                     output_dir=output_dir,
                     strategy=Strategy.AUTO,
                     recursive=False,
+                    use_ocr_for_images=False,  # 默认使用VLM处理图片，而不是OCR
                 )
                 print(f"[DEBUG] Conversion completed successfully")
             except Exception as conv_exc:

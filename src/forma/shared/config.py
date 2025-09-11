@@ -22,6 +22,16 @@ class VlmConfig:
 
 
 @dataclass
+class OcrConfig:
+    """Configuration for OCR models."""
+
+    api_key: str
+    model: str
+    base_url: str | None
+    max_file_size: int  # 最大文件大小（字节）
+
+
+@dataclass
 class LlmConfig:
     """Configuration for Large Language Models (text-only)."""
 
@@ -32,10 +42,11 @@ class LlmConfig:
 
 def get_vlm_config() -> VlmConfig:
     """Load VLM related configuration from environment variables."""
-    api_key = os.getenv("VLM_API_KEY") or os.getenv("FORMA_OPENAI_API_KEY")
+    api_key = os.getenv("VLM_API_KEY") or os.getenv(
+        "FORMA_OPENAI_API_KEY")
     if not api_key:
         raise ValueError(
-            "API key not found. Please set VLM_API_KEY or FORMA_PAID_OPENAI_API_KEY."
+            "API key not found. Please set VLM_API_KEY or FORMA_OPENAI_API_KEY."
         )
 
     return VlmConfig(
@@ -46,12 +57,33 @@ def get_vlm_config() -> VlmConfig:
     )
 
 
-def get_llm_config() -> LlmConfig:
-    """Load LLM related configuration from environment variables."""
-    api_key = os.getenv("LLM_API_KEY") or os.getenv("FORMA_OPENAI_API_KEY")
+def get_ocr_config() -> OcrConfig:
+    """Load OCR related configuration from environment variables."""
+    # 使用与VLM相同的API密钥配置
+    api_key = os.getenv("OCR_API_KEY") or os.getenv(
+        "VLM_API_KEY") or os.getenv("FORMA_OPENAI_API_KEY")
     if not api_key:
         raise ValueError(
-            "API key not found. Please set LLM_API_KEY or FORMA_PAID_OPENAI_API_KEY."
+            "API key not found. Please set OCR_API_KEY, VLM_API_KEY or FORMA_OPENAI_API_KEY."
+        )
+
+    # 默认使用GOT-OCR2_0模型
+    return OcrConfig(
+        api_key=api_key,
+        model=os.getenv("OCR_MODEL", "GOT-OCR2_0"),
+        base_url=os.getenv("OCR_BASE_URL", "https://ai.gitee.com"),
+        max_file_size=int(os.getenv("OCR_MAX_FILE_SIZE",
+                          3 * 1024 * 1024)),  # 默认3MB
+    )
+
+
+def get_llm_config() -> LlmConfig:
+    """Load LLM related configuration from environment variables."""
+    api_key = os.getenv("LLM_API_KEY") or os.getenv(
+        "FORMA_OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "API key not found. Please set LLM_API_KEY or FORMA_OPENAI_API_KEY."
         )
 
     return LlmConfig(
