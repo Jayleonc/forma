@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import uuid
 from typing import List, Tuple
 
 from .chunker import HierarchicalChunker
@@ -39,7 +38,7 @@ class HierarchicalChunkerV2(HierarchicalChunker):
 
         for header, body in sections:
             current_header_chain = header_chain + [header]
-            header_chunk_id = str(uuid.uuid4())
+            header_chunk_id = self._new_id()
 
             # 递归找到所有子标题块
             sub_header_chunks = super()._recursive_chunk(
@@ -122,7 +121,7 @@ class HierarchicalChunkerV2(HierarchicalChunker):
                     if chunk_text:
                         clean_header = re.sub(r'[\:：\*]*\s*$', '', current_header or "").strip()
                         current_header_chain = header_chain + [clean_header]
-                        chunk_id = str(uuid.uuid4())
+                        chunk_id = self._new_id()
                         metadata = self._create_metadata(parent_id, current_header_chain)
                         chunks.append(Chunk(chunk_id=chunk_id, text=chunk_text, metadata=metadata))
                 
@@ -139,7 +138,7 @@ class HierarchicalChunkerV2(HierarchicalChunker):
             if chunk_text:
                 clean_header = re.sub(r'[\:：\*]*\s*$', '', current_header or "").strip()
                 current_header_chain = header_chain + [clean_header]
-                chunk_id = str(uuid.uuid4())
+                chunk_id = self._new_id()
                 metadata = self._create_metadata(parent_id, current_header_chain)
                 chunks.append(Chunk(chunk_id=chunk_id, text=chunk_text, metadata=metadata))
 

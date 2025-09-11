@@ -40,6 +40,15 @@ class LlmConfig:
     base_url: str | None
 
 
+@dataclass
+class EmbeddingConfig:
+    """Configuration for Embedding models (e.g., OpenAI embeddings)."""
+
+    api_key: str
+    model: str
+    base_url: str | None
+
+
 def get_vlm_config() -> VlmConfig:
     """Load VLM related configuration from environment variables."""
     api_key = os.getenv("VLM_API_KEY") or os.getenv(
@@ -109,4 +118,38 @@ def get_openai_llm_config() -> LlmConfig:
     )
 
 
-__all__ = ["VlmConfig", "get_vlm_config", "LlmConfig", "get_llm_config"]
+def get_embedding_model() -> EmbeddingConfig:
+    """Load Embedding model configuration (defaults to OpenAI embeddings).
+
+    Environment variables:
+    - EMBEDDING_API_KEY or FORMA_PAID_OPENAI_API_KEY
+    - EMBEDDING_MODEL (default: text-embedding-3-small)
+    - EMBEDDING_BASE_URL (default: https://api.openai.com/v1)
+    """
+    api_key = (
+        os.getenv("EMBEDDING_API_KEY")
+        or os.getenv("FORMA_PAID_OPENAI_API_KEY")
+    )
+    if not api_key:
+        raise ValueError(
+            "Embedding API key not found. Please set EMBEDDING_API_KEY or FORMA_PAID_OPENAI_API_KEY."
+        )
+
+    return EmbeddingConfig(
+        api_key=api_key,
+        model=os.getenv("EMBEDDING_MODEL", "Qwen3-Embedding-8B"),
+        base_url=os.getenv("FORMA_BASE_URL", "https://api.openai.com/v1"),
+    )
+
+
+__all__ = [
+    "VlmConfig",
+    "get_vlm_config",
+    "OcrConfig",
+    "get_ocr_config",
+    "LlmConfig",
+    "get_llm_config",
+    "get_openai_llm_config",
+    "EmbeddingConfig",
+    "get_embedding_model",
+]

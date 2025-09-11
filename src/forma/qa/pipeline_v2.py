@@ -69,8 +69,8 @@ def run_knowledge_pipeline(
     # Stage 3: Building knowledge
     console.print(Panel("Stage 3/4: Building knowledge", title="[bold cyan]Pipeline Status[/bold cyan]", expand=False))
     builder = HierarchicalKnowledgeBuilder()
-    authoritative_knowledge = builder.build(chunks)
-    console.print(f"  -> Built {len(authoritative_knowledge)} authoritative knowledge units.")
+    qa_pairs = builder.build(chunks)
+    console.print(f"  -> Built {len(qa_pairs)} QA pairs.")
     current_time = time.time()
     console.print(f"  -> Done in {current_time - last_stage_time:.2f}s\n")
     last_stage_time = current_time
@@ -81,24 +81,13 @@ def run_knowledge_pipeline(
     output_path = output_dir / f"{base_name}_knowledge_base.jsonl"
 
     with output_path.open("w", encoding="utf-8") as f:
-        for unit in authoritative_knowledge:
-            f.write(json.dumps(unit.model_dump(), ensure_ascii=False) + "\n")
+        for qa_pair in qa_pairs:
+            f.write(json.dumps(qa_pair, ensure_ascii=False) + "\n")
 
     if export_csv:
-        records = []
-        for unit in authoritative_knowledge:
-            category = unit.category
-            for qa in unit.qa_pairs:
-                records.append(
-                    {
-                        "question": qa["question"],
-                        "answer": qa["answer"],
-                        "category": category,
-                    }
-                )
-        if records:
-            df = pd.DataFrame(records)
+        if qa_pairs:
+            df = pd.DataFrame(qa_pairs)
             csv_path = output_dir / f"{base_name}_knowledge_base.csv"
-            df.to_csv(csv_path, index=False)
+            df.to_csv(csv_path, index=False, columns=["question", "answer", "category"])
 
 __all__ = ["run_knowledge_pipeline"]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import uuid
+import base64
 from typing import List, Tuple
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -15,6 +16,21 @@ class HierarchicalChunker:
     def __init__(self, max_length: int = 80000, source_filename: str | None = None) -> None:
         self.max_length = max_length
         self.source_filename = source_filename or ""
+        # Track generated IDs to avoid collisions within a single run
+        self._generated_ids: set[str] = set()
+
+    def _new_id(self) -> str:
+        """Generate a short, URL-safe unique ID (22 chars) based on UUID4 bytes.
+
+        Uses base64.urlsafe_b64encode(uuid4.bytes) and strips padding '='.
+        This reduces ID length from 36 (canonical UUID string) to ~22 characters.
+        """
+        while True:
+            raw = uuid.uuid4().bytes
+            sid = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+            if sid not in self._generated_ids:
+                self._generated_ids.add(sid)
+                return sid
 
     def chunk(self, markdown_content: str) -> List[Chunk]:
         """Chunk markdown content using a hierarchical strategy."""
@@ -57,7 +73,7 @@ class HierarchicalChunker:
         chunks = self._recursive_chunk(markdown_content, start_level, None, [])
 
         if leading_text:
-            chunk_id = str(uuid.uuid4())
+            chunk_id = self._new_id()
             chunks.insert(
                 0,
                 Chunk(
@@ -84,7 +100,7 @@ class HierarchicalChunker:
 
         return [
             Chunk(
-                chunk_id=str(uuid.uuid4()),
+                chunk_id=self._new_id(),
                 text=text,
                 metadata=self._create_metadata(),
             )
@@ -114,7 +130,7 @@ class HierarchicalChunker:
         if first_match_start > 0:
             leading_text = markdown_content[:first_match_start].strip()
             if leading_text:
-                chunks.append(Chunk(chunk_id=str(uuid.uuid4()),
+                chunks.append(Chunk(chunk_id=self._new_id(),
                               text=leading_text, metadata=self._create_metadata()))
 
         for i, match in enumerate(matches):
@@ -124,7 +140,7 @@ class HierarchicalChunker:
             section_text = markdown_content[start:end].strip()
 
             if section_text:
-                chunk_id = str(uuid.uuid4())
+                chunk_id = self._new_id()
                 chunks.append(
                     Chunk(chunk_id=chunk_id, text=section_text, metadata=self._create_metadata()))
 
@@ -173,7 +189,7 @@ class HierarchicalChunker:
 
         for header, body in sections:
             current_header_chain = header_chain + [header]
-            header_chunk_id = str(uuid.uuid4())
+            header_chunk_id = self._new_id()
 
             # 递归找到所有子标题块
             sub_header_chunks = self._recursive_chunk(
@@ -245,7 +261,7 @@ class HierarchicalChunker:
                 # 封印当前块。
                 chunk_text = "\n\n".join(current_chunk_paragraphs)
                 sub_chunk = Chunk(
-                    chunk_id=str(uuid.uuid4()),
+                    chunk_id=self._new_id(),
                     text=chunk_text,
                     metadata=self._create_metadata(parent_id, header_chain),
                 )
@@ -259,7 +275,7 @@ class HierarchicalChunker:
         if current_chunk_paragraphs:
             chunk_text = "\n\n".join(current_chunk_paragraphs)
             sub_chunk = Chunk(
-                chunk_id=str(uuid.uuid4()),
+                chunk_id=self._new_id(),
                 text=chunk_text,
                 metadata=self._create_metadata(parent_id, header_chain),
             )
