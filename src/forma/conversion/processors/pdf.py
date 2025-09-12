@@ -31,6 +31,7 @@ class PdfProcessor(Processor):
         use_ocr: bool = False,
         min_text_chars: int = 8,
         advanced_ocr_client: Optional[AdvancedOCRClient] = None,
+        use_advanced_ocr: bool = False,
     ):
         """初始化PDF处理器
 
@@ -43,22 +44,25 @@ class PdfProcessor(Processor):
         self._vlm_client = vlm_client
         self._use_ocr = use_ocr
         self._min_text_chars = min_text_chars
-        
-        # 尝试创建高级OCR客户端
-        self._advanced_ocr_client = advanced_ocr_client
-        if self._advanced_ocr_client is None:
-            try:
-                config = get_ocr_config()
-                self._advanced_ocr_client = AdvancedOCRClient(
-                    api_key=config.api_key,
-                    model=config.model,
-                    base_url=config.base_url,
-                    max_file_size=config.max_file_size
-                )
-                print(f"[DEBUG] PdfProcessor: Advanced OCR client initialized with model {config.model}")
-            except Exception as e:
-                print(f"[WARNING] PdfProcessor: Failed to initialize Advanced OCR client: {e}")
-                self._advanced_ocr_client = None
+        self._use_advanced_ocr = use_advanced_ocr
+
+        # 仅在开启开关时才尝试创建高级OCR客户端
+        self._advanced_ocr_client = None
+        if self._use_advanced_ocr:
+            self._advanced_ocr_client = advanced_ocr_client
+            if self._advanced_ocr_client is None:
+                try:
+                    config = get_ocr_config()
+                    self._advanced_ocr_client = AdvancedOCRClient(
+                        api_key=config.api_key,
+                        model=config.model,
+                        base_url=config.base_url,
+                        max_file_size=config.max_file_size
+                    )
+                    print(f"[DEBUG] PdfProcessor: Advanced OCR client initialized with model {config.model}")
+                except Exception as e:
+                    print(f"[WARNING] PdfProcessor: Failed to initialize Advanced OCR client: {e}")
+                    self._advanced_ocr_client = None
 
     def _describe_with_retry(self, image_path: Path, image_index: int) -> str:
         """使用重试机制调用VLM服务描述图片"""
@@ -180,8 +184,7 @@ class PdfProcessor(Processor):
                                     (image_info[i]["path"], result, image_info[i]))
                     else:
                         # 使用原有OCR预处理结果判断图片是否值得进一步处理
-                        print(f"[DEBUG] PdfProcessor: Processing images with VLM and advanced OCR")
-                        
+                        print(f"[DEBUG] PdfProcessor: Processing images with VLM first, then Advanced OCR if enabled (advanced={'ON' if self._use_advanced_ocr and self._advanced_ocr_client else 'OFF'})")
                         # 筛选出有足够文字的图片进行处理
                         valid_images = []
                         for i, result in ocr_results.items():
@@ -195,39 +198,50 @@ class PdfProcessor(Processor):
                             max_workers = min(8, os.cpu_count() * 2)  # 限制并发数，避免资源耗尽
                             batch_processor = BatchProcessor(max_workers=max_workers)
                             
-                            # 定义图片处理函数
+                            # 定义图片处理函数（返回值交由 on_success 汇总）
                             def process_image(item, idx):
                                 i, img_path, ocr_result = item
                                 file_size = os.path.getsize(img_path)
                                 start_time = time.time()
-                                
-                                # 先尝试VLM
-                                if self._vlm_client:
+
+                                # 先尝试使用VLM
+                                if self._vlm_client and len(ocr_result.strip()) >= self._min_text_chars:
                                     try:
+                                        print(f"[DEBUG] PdfProcessor: Processing image {i+1} with VLM (OCR text length: {len(ocr_result)})")
                                         description = self._describe_with_retry(img_path, i+1)
-                                        if description.strip() and len(description.strip()) >= 20:
+                                        if description.strip():  # 只保留非空结果
                                             elapsed = time.time() - start_time
                                             return ("vlm", description, elapsed)
                                     except Exception as e:
                                         print(f"[ERROR] PdfProcessor: VLM failed for image {i+1}: {e}")
-                                
-                                # 如果VLM失败，尝试高级OCR
-                                if self._advanced_ocr_client:
+
+                                # 若VLM失败，且开启高级OCR，则尝试高级OCR
+                                if self._use_advanced_ocr and self._advanced_ocr_client:
                                     try:
+                                        print(f"[DEBUG] PdfProcessor: Processing image {i+1} with GOT-OCR2_0 (file size: {file_size} bytes)")
                                         ocr_text = self._recognize_text_with_retry(img_path, i+1)
                                         if ocr_text.strip():
                                             elapsed = time.time() - start_time
                                             return ("ocr", ocr_text, elapsed)
+                                    except ValueError as e:
+                                        print(f"[WARNING] PdfProcessor: GOT-OCR2_0 skipped for image {i+1}: {e}")
                                     except Exception as e:
                                         print(f"[ERROR] PdfProcessor: GOT-OCR2_0 failed for image {i+1}: {e}")
-                                
-                                # 如果都失败，使用原始OCR结果
-                                return ("basic_ocr", ocr_result, 0)
+
+                                # 如果VLM和（可选）高级OCR都失败，使用原始OCR结果
+                                if len(ocr_result.strip()) >= self._min_text_chars:
+                                    print(f"[DEBUG] PdfProcessor: Using original OCR result for image {i+1} (length: {len(ocr_result)})")
+                                    return ("basic_ocr", ocr_result, 0.0)
+                                # 若不足阈值，不返回内容
+                                return ("skip", "", 0.0)
                             
                             # 定义成功回调
                             def on_success(idx, item, result):
                                 i, img_path, _ = item
                                 source, text, elapsed = result
+                                if source == "skip" or not text or not str(text).strip():
+                                    # 跳过无内容结果
+                                    return
                                 if source == "vlm":
                                     print(f"[DEBUG] PdfProcessor: VLM completed for image {i+1}, description length: {len(text)}, took {elapsed:.2f}s")
                                 elif source == "ocr":

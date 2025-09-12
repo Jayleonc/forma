@@ -11,13 +11,12 @@ from typing import List, Optional
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
-from ...shared.utils.retry import retry
-
 from .base import Processor, ProcessingResult
 from ...ocr import parse_image_to_markdown, AdvancedOCRClient
 from ...vision import VlmParser, VLMClient
 from ...shared.utils.converters import convert_to_pdf
 from ...shared.config import get_ocr_config
+from ...shared.utils.retry import retry
 import fitz  # PyMuPDF
 
 
@@ -26,7 +25,7 @@ class PptxProcessor(Processor):
 
     COMPLEX_THRESHOLD = 25
     
-    def __init__(self, vlm_client: Optional[VLMClient] = None, advanced_ocr_client: Optional[AdvancedOCRClient] = None) -> None:
+    def __init__(self, vlm_client: Optional[VLMClient] = None, advanced_ocr_client: Optional[AdvancedOCRClient] = None, use_advanced_ocr: bool = False) -> None:
         """Initialize the PPTX processor.
         
         Args:
@@ -34,22 +33,25 @@ class PptxProcessor(Processor):
             advanced_ocr_client: Optional advanced OCR client for text recognition
         """
         self._vlm_client = vlm_client
+        self._use_advanced_ocr = use_advanced_ocr
         
-        # 尝试创建高级OCR客户端
-        self._advanced_ocr_client = advanced_ocr_client
-        if self._advanced_ocr_client is None:
-            try:
-                config = get_ocr_config()
-                self._advanced_ocr_client = AdvancedOCRClient(
-                    api_key=config.api_key,
-                    model=config.model,
-                    base_url=config.base_url,
-                    max_file_size=config.max_file_size
-                )
-                print(f"[DEBUG] PptxProcessor: Advanced OCR client initialized with model {config.model}")
-            except Exception as e:
-                print(f"[WARNING] PptxProcessor: Failed to initialize Advanced OCR client: {e}")
-                self._advanced_ocr_client = None
+        # 仅在开启开关时才尝试创建高级OCR客户端
+        self._advanced_ocr_client = None
+        if self._use_advanced_ocr:
+            self._advanced_ocr_client = advanced_ocr_client
+            if self._advanced_ocr_client is None:
+                try:
+                    config = get_ocr_config()
+                    self._advanced_ocr_client = AdvancedOCRClient(
+                        api_key=config.api_key,
+                        model=config.model,
+                        base_url=config.base_url,
+                        max_file_size=config.max_file_size
+                    )
+                    print(f"[DEBUG] PptxProcessor: Advanced OCR client initialized with model {config.model}")
+                except Exception as e:
+                    print(f"[WARNING] PptxProcessor: Failed to initialize Advanced OCR client: {e}")
+                    self._advanced_ocr_client = None
 
     def _parse_with_retry(self, image_path: Path, slide_idx: int) -> str:
         """使用重试机制调用VLM服务解析幻灯片"""
@@ -166,48 +168,38 @@ class PptxProcessor(Processor):
                         img_path = tmp / f"complex_slide_{idx}.png"
                         pix.save(str(img_path))
                         
-                        # 先使用原有的图像分析方法进行预处理
-                        # 然后优先使用高级OCR（GOT-OCR2_0），失败时使用VLM兜底
+                        # 深度路径：VLM优先，其次（开启时）高级OCR，最后快速路径文本兜底
                         final_markdown = ""
                         file_size = os.path.getsize(img_path)
-                        
-                        # 优先使用VLM处理幻灯片内容
+
+                        # 1) VLM 优先
                         if self._vlm_client:
-                            start_time = time.time()
                             try:
                                 print(f"[DEBUG] PptxProcessor: Processing slide {idx+1} with VLM")
-                                vlm_markdown = self._parse_with_retry(img_path, idx)
-                                # 检查VLM结果质量，如果结果过短，则不认为成功
-                                if vlm_markdown.strip() and len(vlm_markdown.strip()) >= 20:  # 至少20个字符才认为有效
+                                vlm_markdown = vlm.parse(img_path)
+                                if vlm_markdown.strip():
                                     final_markdown = vlm_markdown
-                                    elapsed = time.time() - start_time
-                                    print(f"[DEBUG] PptxProcessor: VLM completed for slide {idx+1}, text length: {len(vlm_markdown)}, took {elapsed:.2f}s")
+                                    print(f"[DEBUG] PptxProcessor: VLM completed for slide {idx+1}, text length: {len(vlm_markdown)}")
                                 else:
-                                    print(f"[WARNING] PptxProcessor: VLM result too short for slide {idx+1}, length: {len(vlm_markdown.strip() if vlm_markdown else '')}, falling back to OCR")
+                                    print(f"[DEBUG] PptxProcessor: VLM returned empty result for slide {idx+1}")
                             except Exception as e:
-                                print(f"[ERROR] PptxProcessor: VLM failed for slide {idx+1} after retries: {e}")
-                        
-                        # 如果VLM失败或返回空结果，使用高级OCR（GOT-OCR2_0）兜底
-                        if not final_markdown and self._advanced_ocr_client:
-                            start_time = time.time()
+                                print(f"[ERROR] PptxProcessor: VLM failed for slide {idx+1}: {e}")
+
+                        # 2) 若VLM失败或为空，且开启高级OCR，则尝试高级OCR
+                        if not final_markdown and self._use_advanced_ocr and self._advanced_ocr_client:
                             try:
                                 print(f"[DEBUG] PptxProcessor: Processing slide {idx+1} with GOT-OCR2_0 (file size: {file_size} bytes)")
-                                ocr_text = self._recognize_text_with_retry(img_path, idx)
-                                if ocr_text.strip():  # 只保留非空结果
+                                ocr_text = self._advanced_ocr_client.recognize_text(img_path)
+                                if ocr_text.strip():
                                     final_markdown = ocr_text
-                                    elapsed = time.time() - start_time
-                                    print(f"[DEBUG] PptxProcessor: GOT-OCR2_0 completed for slide {idx+1}, text length: {len(ocr_text)}, took {elapsed:.2f}s")
+                                    print(f"[DEBUG] PptxProcessor: GOT-OCR2_0 completed for slide {idx+1}, text length: {len(ocr_text)}")
                                 else:
                                     print(f"[DEBUG] PptxProcessor: GOT-OCR2_0 returned empty result for slide {idx+1}")
                             except ValueError as e:
-                                # 文件大小超限或其他值错误
                                 print(f"[WARNING] PptxProcessor: GOT-OCR2_0 skipped for slide {idx+1}: {e}")
                             except Exception as e:
-                                # 其他错误
-                                print(f"[ERROR] PptxProcessor: GOT-OCR2_0 failed for slide {idx+1} after retries: {e}")
-                        # 已在前面优先使用VLM，这里不需要重复
-                        
-                        # 如果GOT-OCR2_0和VLM都失败，使用快速路径文本
+                                print(f"[ERROR] PptxProcessor: GOT-OCR2_0 failed for slide {idx+1}: {e}")
+                        # 3) 快速路径文本兜底
                         if not final_markdown:
                             fast_path_text = complex_slide_texts.get(idx, "")
                             if fast_path_text:
