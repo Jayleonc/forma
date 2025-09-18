@@ -37,9 +37,11 @@ class MarkdownCleaner:
         
         # 步骤3: 删除连续的分隔符
         # 这会处理多个连续的分隔符的情况
-        pattern = re.compile(r'(---\s*\n)+---')
-        while pattern.search(content):
-            content = pattern.sub('---', content)
+        # 先将所有可能的带空格的---统一为---
+        content = re.sub(r'---\s*\n', '---\n', content)
+        # 用简单的循环替换来处理连续的分隔符
+        while '---\n---' in content:
+            content = content.replace('---\n---', '---')
         
         # 步骤4: 确保分隔符前后有空行
         content = re.sub(r'([^\n])(\n---)', r'\1\n\n---', content)
@@ -57,7 +59,25 @@ class MarkdownCleaner:
         
         # 步骤8: 清理文末连续的图片描述（image desc）块
         # 如果文档末尾仅包含若干行形如 "> **image desc N**: ..." 的描述，将这些尾部块整体去除
-        content = re.sub(r'(?:\n?\s*> \*\*image desc\s+\d+\*\*:[^\n]*\n?\s*)+\Z', '\n', content, flags=re.IGNORECASE)
+        lines = content.splitlines()
+        trailing_desc_pattern = re.compile(r'^\s*> \*\*image desc\s+\d+\*\*:', re.IGNORECASE)
+        
+        # 从后向前遍历，找到第一个不是图片描述的行
+        last_content_line_index = -1
+        for i in range(len(lines) - 1, -1, -1):
+            if not trailing_desc_pattern.match(lines[i]):
+                last_content_line_index = i
+                break
+        
+        # 如果找到了非描述行，就切片保留之前的内容；否则说明全是描述，清空
+        if last_content_line_index != -1:
+            content = "\n".join(lines[:last_content_line_index + 1])
+        else:
+            content = ""
+        
+        # 恢复可能存在的文末换行符
+        if content:
+            content += "\n"
         
         # 步骤9: 移除无信息量的图片描述行（过短/噪声）
         def _filter_line(line: str) -> str:

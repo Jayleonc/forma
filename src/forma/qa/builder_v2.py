@@ -32,9 +32,13 @@ class HierarchicalKnowledgeBuilder:
         prompt_manager: PromptManager | None = None,
         client: ChatOpenAI | None = None,
         max_workers: int = 20,  # 默认并行处理线程数
-        chunk_max_length: int = 50000,  # 单次处理的最大文本长度
-        parent_summary_max_length: int = 1000,  # 父级摘要最大长度
-        header_chain_max_length: int = 500,  # 层级路径最大长度
+        chunk_max_length: int = 12000,  # 单次处理的最大文本长度（字符），保守以避免超长
+        parent_summary_max_length: int = 1000,  # 父级摘要最大长度（字符）
+        header_chain_max_length: int = 500,  # 层级路径最大长度（字符）
+        # 下面是与token预算有关的可调参数（不会改变大逻辑，仅用于安全截断）
+        model_context_tokens: int = 32768,  # 目标模型上下文窗口，默认32k
+        token_reserve: int = 3000,  # 预留给系统/用户静态提示、解析器修复和响应等的token
+        chars_per_token: float = 3.5,  # 近似换算系数：字符数 -> token数
     ) -> None:
         cfg = get_llm_config()
         # Initialize LLM client with deterministic, JSON-enforcing settings
@@ -51,6 +55,29 @@ class HierarchicalKnowledgeBuilder:
         self.parent_summary_max_length = parent_summary_max_length
         self.header_chain_max_length = header_chain_max_length
         self.start_time = time.time()
+        # token预算配置
+        self.model_context_tokens = model_context_tokens
+        self.token_reserve = token_reserve
+        self.chars_per_token = chars_per_token
+
+    # --- Token 预算相关的内部辅助函数（启发式估算，无侵入性） ---
+    def _approx_tokens(self, text: str) -> int:
+        """基于启发式的字符数到token的近似换算，避免引入额外依赖。
+
+        对于中英文混杂文本，3.5字符≈1 token 是较保守估计，可有效避免溢出。
+        """
+        if not text:
+            return 0
+        return int(len(text) / max(self.chars_per_token, 1e-6))
+
+    def _truncate_by_tokens(self, text: str, max_tokens: int) -> str:
+        if max_tokens <= 0:
+            return ""
+        # 将token预算转换为字符预算进行快速截断
+        max_chars = int(max_tokens * self.chars_per_token)
+        if max_chars <= 0:
+            return ""
+        return text[:max_chars]
 
     def _invoke(self, prompt: Dict[str, Any]) -> str:
         messages = []
@@ -144,15 +171,69 @@ class HierarchicalKnowledgeBuilder:
         try:
             # 调用大模型提炼知识，注入层级路径和父级摘要
             print(f"[INFO] 开始处理节点 {chunk.chunk_id}")
-            # 限制单次调用的文本长度，兼顾速度与信息密度
+            # 先做字符级的保守截断，兼顾速度与信息密度
             truncated_text = plain_text[:self.chunk_max_length]
+
+            # 基于token预算的安全截断：为提示词、父级摘要、层级路径和格式指令预留空间
+            # 说明：不改变大逻辑，仅在调用前进行一次非侵入性的长度控制，避免 400 溢出。
+            format_instructions = base_parser.get_format_instructions()
+
+            # 估算上下文各部分的token占用
+            parent_tokens = self._approx_tokens(parent_summary)
+            header_tokens = self._approx_tokens(header_chain)
+            fmt_tokens = self._approx_tokens(format_instructions)
+
+            # 计算可用于chunk_text的token预算
+            available_for_chunk = (
+                self.model_context_tokens
+                - self.token_reserve
+                - parent_tokens
+                - header_tokens
+                - fmt_tokens
+            )
+
+            # 若预算已为负，优先裁剪父级摘要，再裁剪层级路径，尽力为chunk_text留出至少少量空间
+            if available_for_chunk <= 0:
+                # 先裁剪父级摘要到一小段
+                parent_summary = self._truncate_by_tokens(parent_summary, 200)
+                parent_tokens = self._approx_tokens(parent_summary)
+                available_for_chunk = (
+                    self.model_context_tokens
+                    - self.token_reserve
+                    - parent_tokens
+                    - header_tokens
+                    - fmt_tokens
+                )
+                if available_for_chunk <= 0:
+                    # 再裁剪层级路径
+                    header_chain = self._truncate_by_tokens(header_chain, 100)
+                    header_tokens = self._approx_tokens(header_chain)
+                    available_for_chunk = (
+                        self.model_context_tokens
+                        - self.token_reserve
+                        - parent_tokens
+                        - header_tokens
+                        - fmt_tokens
+                    )
+
+            # 为chunk_text至少保证一个下限，避免被截断到0
+            min_chunk_tokens = 800
+            max_chunk_tokens = max(available_for_chunk, min_chunk_tokens)
+            safe_truncated_text = self._truncate_by_tokens(truncated_text, max_chunk_tokens)
+
+            # 打印调试信息便于排查
+            print(
+                f"[DEBUG] Token预算: total={self.model_context_tokens}, reserve={self.token_reserve}, "
+                f"parent≈{parent_tokens}, header≈{header_tokens}, fmt≈{fmt_tokens}, "
+                f"chunk_budget≈{max_chunk_tokens}, chunk_chars={len(safe_truncated_text)}"
+            )
             response = chain.invoke(
                 {
-                    "chunk_text": truncated_text,
+                    "chunk_text": safe_truncated_text,
                     "header_chain": header_chain,
                     "parent_summary": parent_summary,
                     "preferred_language_instruction": preferred_language_instruction,
-                    "format_instructions": base_parser.get_format_instructions(),
+                    "format_instructions": format_instructions,
                 }
             )
 

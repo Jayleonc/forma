@@ -24,3 +24,12 @@
     - 提供配置开关（环境变量或 config）：如 `OCR_BACKENDS=paddle,rapid,tesseract` 与优先级。
     - 对中文样本做准确率评估，明确适用范围与告警提示。
   - **相关文件：** `src/forma/ocr/engine.py`, `src/forma/conversion/processors/pdf.py`
+
+
+
+## 图片描述插入位置问题
+
+各种文档中包含图片时，图片描述的插入位置需要智能判断，当前有一些格式的处理时直接放在最终md的末尾，可能不太好，调整代码和提示词。
+
+
+> **image desc 26**: [VLM 调用失败] 这种过滤掉

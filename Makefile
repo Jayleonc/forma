@@ -7,6 +7,12 @@ VENV   ?= .venv
 LOCK   ?= uv.lock
 REQEXP ?= requirements.lock.txt
 WHEEL_DIR ?= vendor/wheels
+# 使用清华镜像源加速下载
+PYPI_MIRROR ?= --index-url https://pypi.tuna.tsinghua.edu.cn/simple
+
+# 临时：当网络环境（如VPN/代理）导致TLS握手失败时，设置此环境变量以绕过证书验证
+# 警告：这会带来安全风险，应在解决网络问题后移除
+export UV_INSECURE=1
 
 # Detect OS for platform-specific flags
 UNAME_S := $(shell uname -s)
@@ -26,12 +32,12 @@ venv:
 .PHONY: lock
 lock:
 	@echo ">> uv lock (resolve deps into $(LOCK))"
-	@uv lock $(UV_PLATFORM_FLAGS)
+	@uv lock $(PYPI_MIRROR) $(UV_PLATFORM_FLAGS)
 
 .PHONY: sync
 sync:
 	@echo ">> uv sync --frozen (strictly install from $(LOCK))"
-	@uv sync --frozen $(UV_PLATFORM_FLAGS)
+	@uv sync --frozen $(PYPI_MIRROR) $(UV_PLATFORM_FLAGS)
 
 # 一键：先 lock 再 sync（默认推荐用这个）
 .PHONY: deps
@@ -47,14 +53,14 @@ deps: venv lock sync
 add:
 	@test -n "$(pkg)" || (echo "Usage: make add pkg=\"package[==ver]\""; exit 2)
 	@echo ">> uv add $(pkg)"
-	@uv add $(pkg)
+	@uv add $(pkg) $(PYPI_MIRROR)
 	@$(MAKE) sync
 
 .PHONY: remove
 remove:
 	@test -n "$(pkg)" || (echo "Usage: make remove pkg=\"package\""; exit 2)
 	@echo ">> uv remove $(pkg)"
-	@uv remove $(pkg)
+	@uv remove $(pkg) $(PYPI_MIRROR)
 	@$(MAKE) sync
 
 # ------------- 导出 & 离线安装支持 -------------
@@ -69,7 +75,7 @@ export:
 wheels: export
 	@echo ">> pre-download wheels to $(WHEEL_DIR)"
 	@mkdir -p $(WHEEL_DIR)
-	@uv pip download -r $(REQEXP) -d $(WHEEL_DIR)
+	@uv pip download -r $(REQEXP) -d $(WHEEL_DIR) $(PYPI_MIRROR)
 
 # 完全离线/半离线安装（优先本地 wheel 仓）
 .PHONY: offline-sync

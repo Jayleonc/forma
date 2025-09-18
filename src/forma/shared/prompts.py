@@ -36,6 +36,12 @@ class PromptManager:
     """
 
     _ALLOWED_VARS_MAP = {
+        # 图像描述相关提示词
+        "default_image_description": set(),  # 无变量
+        "docx_image_description": set(),     # 无变量
+        "pdf_image_description": set(),      # 无变量
+        
+        # 知识提取相关提示词
         "knowledge_distillation_prompt": {"chunk_text", "format_instructions"},
         "global_knowledge_synthesis_prompt": {"enriched_chunks", "format_instructions"},
         # Allow variables for hierarchical prompt so placeholders are substituted correctly
@@ -57,6 +63,8 @@ class PromptManager:
                 # Double-check locking to prevent race conditions
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
+                    # 初始化一个空的 _prompts 字典，确保即使 _load_prompts 失败也能有这个属性
+                    cls._instance._prompts = {}
                     cls._instance._load_prompts()
         return cls._instance
 
@@ -81,7 +89,8 @@ class PromptManager:
             if not isinstance(raw_prompts, dict):
                 raise ValueError("Invalid 'prompts' structure in YAML")
 
-            self._prompts: Dict[str, Dict[str, Any]] = {}
+            # 清空并重新填充 _prompts 字典
+            self._prompts.clear()
             for name, template in raw_prompts.items():
                 allowed_vars = self._ALLOWED_VARS_MAP.get(name, set())
                 self._prompts[name] = {
@@ -92,12 +101,29 @@ class PromptManager:
                         template.get("user", ""), allowed_vars
                     ),
                 }
+            
+            # 打印已加载的提示词列表
+            print(f"[DEBUG] Successfully loaded {len(self._prompts)} prompts: {', '.join(self._prompts.keys())}")
+            
+            # 检查是否有关键提示词缺失
+            key_prompts = ["default_image_description", "pdf_image_description", "docx_image_description"]
+            missing_prompts = [p for p in key_prompts if p not in self._prompts]
+            if missing_prompts:
+                print(f"[WARNING] Some key prompts are missing: {', '.join(missing_prompts)}")
+            else:
+                print(f"[DEBUG] All key prompts are loaded successfully.")
         except FileNotFoundError:
-            self._prompts = {}
+            # 文件不存在时，保持 _prompts 为空字典
+            print(f"[WARNING] prompts.yaml file not found at {root / 'prompts.yaml'}")
+            # self._prompts 已在 __new__ 中初始化为空字典
         except (yaml.YAMLError, ValueError) as e:
-            # Handle cases of malformed YAML or incorrect structure
-            raise ValueError(
-                f"Failed to load or parse prompts.yaml: {e}") from e
+            # 处理 YAML 格式错误或结构不正确的情况
+            print(f"[ERROR] Failed to load or parse prompts.yaml: {e}")
+            # 保持 _prompts 为空字典，而不是抛出异常
+        except Exception as e:
+            # 捕获所有其他异常，确保不会影响程序的正常运行
+            print(f"[ERROR] Unexpected error when loading prompts.yaml: {e}")
+            # self._prompts 已在 __new__ 中初始化为空字典
 
     def get_prompt(self, name: str) -> Dict[str, Any]:
         """Return the prompt dictionary for the given name."""

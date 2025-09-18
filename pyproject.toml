@@ -35,7 +35,7 @@ dependencies = [
   "fastapi",
   "uvicorn[standard]",
   "python-multipart",
-  "httpx",
+  "httpx"
 ]
 
 [project.optional-dependencies]
@@ -43,7 +43,7 @@ dev = [
   "pytest>=8.3.0",
   "pytest-cov>=5.0.0",
   "ipython>=8.0.0",
-  "ruff", 
+  "ruff"
 ]
 gpu = [
     "paddlepaddle-gpu",

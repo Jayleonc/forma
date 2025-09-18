@@ -89,5 +89,64 @@ Another paragraph."""
         self.assertEqual(cleaned, expected)
 
 
+    def test_clean_markdown_trailing_image_descriptions(self):
+        """Test cleaning content with trailing image descriptions."""
+        content = """# Document Title
+
+This is some content.
+
+> **Image Desc 1**: A simple image
+> **Image Desc 2**: Another image
+> **Image Desc 3**: Yet another image
+"""
+        
+        expected = """# Document Title
+
+This is some content.
+"""
+        
+        cleaned = MarkdownCleaner.clean_markdown(content)
+        self.assertEqual(cleaned, expected)
+    
+    def test_clean_markdown_complex_separators(self):
+        """Test cleaning content with complex separator patterns."""
+        content = """# Document Title
+
+This is some content.
+
+--- 
+
+---  
+
+---
+
+More content.
+"""
+        
+        expected = """# Document Title
+
+This is some content.
+
+---
+
+More content.
+"""
+        
+        cleaned = MarkdownCleaner.clean_markdown(content)
+        self.assertEqual(cleaned, expected)
+
+    def test_clean_markdown_large_content(self):
+        """Test cleaning a large content that would potentially cause backtracking issues."""
+        # Create a large content with many separators and image descriptions
+        separators = "---\n" * 100
+        image_descs = "\n".join([f"> **Image Desc {i}**: Description {i}" for i in range(1, 101)])
+        content = f"# Document Title\n\nThis is some content.\n\n{separators}\n\nMore content.\n\n{image_descs}"
+        
+        # The expected result should have only one separator and no trailing image descriptions
+        expected = "# Document Title\n\nThis is some content.\n\n---\n\nMore content.\n"
+        
+        cleaned = MarkdownCleaner.clean_markdown(content)
+        self.assertEqual(cleaned, expected)
+
 if __name__ == "__main__":
     unittest.main()

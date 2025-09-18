@@ -13,7 +13,7 @@ from enum import Enum
 from pathlib import Path
 from typing import List, Optional, Union
 
-from ..shared.utils.timeout import timeout, TimeoutError
+# 移除 pebble 和 concurrent.futures 导入，使用 asyncio 统一并发模型
 from ..vision import OpenAIVLMClient, VlmParser, VLMClient
 from ..shared.custom_types import Strategy
 from .processors import (
@@ -29,7 +29,7 @@ from ..shared.config import get_vlm_config
 
 THRESHOLD = get_vlm_config().auto_threshold
 
-__all__ = ["run_conversion"]
+__all__ = ["run_conversion", "process_fallback"]
 
 
 # ---------------------------------------------------------------------------
@@ -231,67 +231,89 @@ def _process_single_file(
     print(
         f"[DEBUG] Using standard processor for {path}: {processor.__class__.__name__}")
     try:
-        # 添加超时机制，最长处理时间为300秒（5分钟）
-        @timeout(300)
-        def process_with_timeout(processor, path):
-            start_time = time.time()
-            result = processor.process(path)
-            elapsed = time.time() - start_time
-            print(
-                f"[DEBUG] Processing completed in {elapsed:.2f}s, text length: {result.text_char_count}, low confidence: {result.low_confidence}")
-            return result
-
         result = None
         final_md = None
+
+        print(f"[DEBUG] >>> STEP 1: About to call processor.process() for {path}")
+        # 直接调用处理器的 process 方法，不再使用 pebble 线程池
+        # 超时控制将在 server.py 中通过 asyncio.wait_for 实现
+        result = processor.process(path)
+        final_md = result.markdown_content
+        print(f"[DEBUG] <<< STEP 1: processor.process() completed successfully. Result text length: {len(final_md)}")
         
-        try:
-            result: ProcessingResult = process_with_timeout(processor, path)
-            final_md = result.markdown_content
-        except TimeoutError:
-            print(
-                f"[ERROR] Processing timed out after 300 seconds for {path}, falling back to simpler method")
-            # 如果超时，可以尝试使用更简单的处理方法
-            if isinstance(processor, PdfProcessor) and hasattr(processor, "_use_ocr"):
-                # 对于PDF处理器，可以切换到仅使用OCR模式
-                print(f"[DEBUG] Retrying with OCR-only mode for PDF")
-                processor._use_ocr = True
-                result = processor.process(path)
-                final_md = result.markdown_content
-            else:
-                # 对于其他处理器，如果有VLM可用，直接使用VLM
-                if vlm_client:
-                    print(f"[DEBUG] Falling back to VLM due to timeout")
-                    if not vlm_parser:
-                        vlm_parser = VlmParser(vlm_client)
-                    final_md = vlm_parser.parse(path, prompt_name=prompt_name)
-                    # 创建一个虚拟result对象，避免后面的代码出错
-                    result = ProcessingResult(
-                        markdown_content=final_md,
-                        text_char_count=len(final_md),
-                        image_count=0,
-                        low_confidence=False
-                    )
-                else:
-                    raise  # 如果没有可用的备选方案，重新抛出超时异常
+        # 注意：超时处理逻辑已移至 server.py 中的 asyncio.wait_for
+        # 这里保留备用处理逻辑，供 server.py 中超时后调用
+        
+        # 超时处理逻辑已移至模块级函数 process_fallback
 
         # For AUTO mode on other file types, use confidence score to decide.
         if result and strategy == Strategy.AUTO and (
             result.low_confidence or result.text_char_count < THRESHOLD
         ):
-            print(
-                f"[DEBUG] Low confidence or text below threshold ({result.text_char_count} < {THRESHOLD}), using VLM")
+            print(f"[DEBUG] >>> STEP 2: Entering AUTO mode fallback logic.")
+            print(f"[DEBUG] Low confidence or text below threshold ({result.text_char_count} < {THRESHOLD}), using VLM")
             if not vlm_parser:
                 print(f"[DEBUG] Creating VlmParser for fallback processing")
                 vlm_parser = VlmParser(vlm_client)
             print(f"[DEBUG] Parsing with VLM as fallback: {path}")
             final_md = vlm_parser.parse(path, prompt_name=prompt_name)
+            print(f"[DEBUG] <<< STEP 2: AUTO mode fallback logic completed.")
 
+        print(f"[DEBUG] >>> STEP 3: About to clean final markdown content (length: {len(final_md)}).")
         # 应用Markdown清洗
         cleaned_final_md = MarkdownCleaner.clean_markdown(final_md)
-        print(
-            f"[DEBUG] Writing cleaned final result to {output_path}, content length: {len(cleaned_final_md)}")
+        print(f"[DEBUG] <<< STEP 3: Markdown cleaning completed. Cleaned length: {len(cleaned_final_md)}")
+        
+        print(f"[DEBUG] >>> STEP 4: About to write cleaned markdown to {output_path}.")
         output_path.write_text(cleaned_final_md, encoding="utf-8")
+        print(f"[DEBUG] <<< STEP 4: Successfully wrote to output file. Processing for this file is complete.")
     except Exception as e:
         print(
             f"[ERROR] Error processing file {path}: {e.__class__.__name__}: {e}")
         raise
+
+
+def process_fallback(processor, path, vlm_client, vlm_parser, prompt_name):
+    """当主处理方法超时时的备用处理逻辑
+    
+    Parameters
+    ----------
+    processor : Processor
+        文件处理器实例
+    path : Path
+        要处理的文件路径
+    vlm_client : VLMClient | None
+        VLM客户端实例
+    vlm_parser : VlmParser | None
+        VLM解析器实例
+    prompt_name : str
+        提示词名称
+        
+    Returns
+    -------
+    tuple
+        (markdown_content, result)元组
+    """
+    if isinstance(processor, PdfProcessor) and hasattr(processor, "_use_ocr"):
+        # 对于PDF处理器，可以切换到仅使用OCR模式
+        print(f"[DEBUG] Retrying with OCR-only mode for PDF")
+        processor._use_ocr = True
+        result = processor.process(path)
+        return result.markdown_content, result
+    else:
+        # 对于其他处理器，如果有VLM可用，直接使用VLM
+        if vlm_client:
+            print(f"[DEBUG] Falling back to VLM due to timeout")
+            if not vlm_parser:
+                vlm_parser = VlmParser(vlm_client)
+            final_md = vlm_parser.parse(path, prompt_name=prompt_name)
+            # 创建一个虚拟result对象
+            result = ProcessingResult(
+                markdown_content=final_md,
+                text_char_count=len(final_md),
+                image_count=0,
+                low_confidence=False
+            )
+            return final_md, result
+        else:
+            raise RuntimeError(f"处理超时，且没有可用的备选方案")

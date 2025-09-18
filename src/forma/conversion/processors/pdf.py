@@ -206,14 +206,33 @@ class PdfProcessor(Processor):
 
                                 # 先尝试使用VLM
                                 if self._vlm_client and len(ocr_result.strip()) >= self._min_text_chars:
+                                    # 检查图像尺寸
+                                    skip_vlm = False
                                     try:
-                                        print(f"[DEBUG] PdfProcessor: Processing image {i+1} with VLM (OCR text length: {len(ocr_result)})")
-                                        description = self._describe_with_retry(img_path, i+1)
-                                        if description.strip():  # 只保留非空结果
-                                            elapsed = time.time() - start_time
-                                            return ("vlm", description, elapsed)
+                                        from PIL import Image
+                                        with Image.open(img_path) as img:
+                                            width, height = img.size
+                                            if width < 30 or height < 30:  # 设置一个安全的最小尺寸
+                                                print(f"[INFO] PdfProcessor: Image {i+1} is too small: {width}x{height}, skipping VLM processing")
+                                                skip_vlm = True  # 标记跳过 VLM 处理
+                                    except ImportError:
+                                        print("[WARNING] PdfProcessor: PIL not installed, skipping image size check")
                                     except Exception as e:
-                                        print(f"[ERROR] PdfProcessor: VLM failed for image {i+1}: {e}")
+                                        print(f"[WARNING] PdfProcessor: Failed to check image size: {e}")
+                                        # 如果无法检查尺寸，我们不跳过处理
+                                    
+                                    # 只有当图像尺寸足够大时，才调用 VLM
+                                    if not skip_vlm:
+                                        try:
+                                            print(f"[DEBUG] PdfProcessor: Processing image {i+1} with VLM (OCR text length: {len(ocr_result)})")
+                                            description = self._describe_with_retry(img_path, i+1)
+                                            if description.strip():  # 只保留非空结果
+                                                elapsed = time.time() - start_time
+                                                return ("vlm", description, elapsed)
+                                        except Exception as e:
+                                            print(f"[ERROR] PdfProcessor: VLM failed for image {i+1}: {e}")
+                                    else:
+                                        print(f"[INFO] PdfProcessor: Skipped VLM for image {i+1} due to small size")
 
                                 # 若VLM失败，且开启高级OCR，则尝试高级OCR
                                 if self._use_advanced_ocr and self._advanced_ocr_client:
