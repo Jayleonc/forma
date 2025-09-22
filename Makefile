@@ -124,3 +124,37 @@ clean:
 	@rm -rf $(VENV) .venv .pytest_cache .ruff_cache build dist *.egg-info
 	@find . -type d -name "__pycache__" -exec rm -rf {} +
 	@echo "Clean complete."
+
+# ---------------- Docker 部署 ----------------
+IMAGE_NAME ?= forma-service
+TAG        ?= latest
+CONTAINER_NAME ?= forma
+NETWORK_NAME   ?= metax_rag_network
+PORT ?= 8090
+
+.PHONY: network
+network:
+	@docker network inspect $(NETWORK_NAME) >/dev/null 2>&1 || docker network create $(NETWORK_NAME)
+
+.PHONY: docker-build
+docker-build:
+	@echo ">> building docker image $(IMAGE_NAME):$(TAG)"
+	docker build -t $(IMAGE_NAME):$(TAG) .
+
+.PHONY: docker-run
+docker-run: network
+	@echo ">> starting container $(CONTAINER_NAME) on network $(NETWORK_NAME)"
+	docker run -d --rm \
+		--name $(CONTAINER_NAME) \
+		--network $(NETWORK_NAME) \
+		-p $(PORT):$(PORT) \
+		$(IMAGE_NAME):$(TAG)
+
+.PHONY: docker-stop
+docker-stop:
+	@echo ">> stopping container $(CONTAINER_NAME)"
+	@docker rm -f $(CONTAINER_NAME) >/dev/null 2>&1 || true
+
+.PHONY: docker-logs
+docker-logs:
+	@docker logs -f $(CONTAINER_NAME)
