@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from pathlib import Path
 import tempfile
-from typing import Any, Optional
+from typing import Optional
 
 from docx import Document
 from docx.document import Document as DocumentObject
@@ -21,6 +22,9 @@ from ...ocr import ocr_image_file, AdvancedOCRClient
 from ...vision import VLMClient
 from ...shared.config import get_ocr_config
 from .base import ProcessingResult, Processor
+
+
+logger = logging.getLogger(__name__)
 
 
 class DocxProcessor(Processor):
@@ -44,24 +48,39 @@ class DocxProcessor(Processor):
             self._advanced_ocr_client = advanced_ocr_client
             if self._advanced_ocr_client is None:
                 try:
-                    config = get_advanced_ocr_config()
+                    config = get_ocr_config()
                     self._advanced_ocr_client = AdvancedOCRClient(
                         api_key=config.api_key,
                         model=config.model,
                         base_url=config.base_url,
                         max_file_size=config.max_file_size
                     )
-                    print(f"[DEBUG] DocxProcessor: Advanced OCR client initialized with model {config.model}")
+                    logger.debug(
+                        "DocxProcessor: Advanced OCR client initialized with model %s",
+                        config.model,
+                    )
                 except Exception as e:
-                    print(f"[WARNING] DocxProcessor: Failed to initialize Advanced OCR client: {e}")
+                    logger.warning(
+                        "DocxProcessor: Failed to initialize Advanced OCR client: %s",
+                        e,
+                    )
                     self._advanced_ocr_client = None
 
     def _describe_with_retry(self, image_path: Path, image_id: str = None) -> str:
         """使用重试机制调用VLM服务描述图片"""
         
-        @retry(max_tries=3, delay=1.0, backoff=2.0, 
-               exceptions=(Exception,),
-               on_retry=lambda e, i: print(f"[WARNING] DocxProcessor: VLM retry {i}/3 for image {image_id or 'unknown'} due to: {e}"))
+        @retry(
+            max_tries=3,
+            delay=1.0,
+            backoff=2.0,
+            exceptions=(Exception,),
+            on_retry=lambda e, i: logger.warning(
+                "DocxProcessor: VLM retry %s/3 for image %s due to: %s",
+                i,
+                image_id or "unknown",
+                e,
+            ),
+        )
         def _describe(path, prompt):
             return self._vlm_client.describe(path, prompt_name=prompt)
         
@@ -70,9 +89,18 @@ class DocxProcessor(Processor):
     def _recognize_text_with_retry(self, image_path: Path, image_id: str = None) -> str:
         """使用重试机制调用高级OCR服务识别图片文字"""
         
-        @retry(max_tries=3, delay=1.0, backoff=2.0, 
-               exceptions=(Exception,),
-               on_retry=lambda e, i: print(f"[WARNING] DocxProcessor: GOT-OCR2_0 retry {i}/3 for image {image_id or 'unknown'} due to: {e}"))
+        @retry(
+            max_tries=3,
+            delay=1.0,
+            backoff=2.0,
+            exceptions=(Exception,),
+            on_retry=lambda e, i: logger.warning(
+                "DocxProcessor: GOT-OCR2_0 retry %s/3 for image %s due to: %s",
+                i,
+                image_id or "unknown",
+                e,
+            ),
+        )
         def _recognize(path):
             return self._advanced_ocr_client.recognize_text(path)
         
@@ -103,8 +131,10 @@ class DocxProcessor(Processor):
                                 # 使用原有OCR进行预处理
                                 ocr_result = ocr_image_file(
                                     str(temp_image_path))
-                                print(
-                                    f"[DEBUG] DocxProcessor: OCR pre-screening completed, text length: {len(ocr_result)}")
+                                logger.debug(
+                                    "DocxProcessor: OCR pre-screening completed, text length: %s",
+                                    len(ocr_result),
+                                )
 
                                 # 获取文件大小
                                 file_size = os.path.getsize(temp_image_path)
@@ -115,37 +145,58 @@ class DocxProcessor(Processor):
                                     # 1) 先尝试 VLM
                                     if self._vlm_client:
                                         try:
-                                            print(f"[DEBUG] DocxProcessor: Processing image with VLM")
-                                            vlm_description = self._vlm_client.describe(temp_image_path, prompt_name="docx_image_description")
+                                            logger.debug("DocxProcessor: Processing image with VLM")
+                                            vlm_description = self._vlm_client.describe(
+                                                temp_image_path, prompt_name="docx_image_description"
+                                            )
                                             if vlm_description.strip():
                                                 description = vlm_description
-                                                print(f"[DEBUG] DocxProcessor: VLM completed, description length: {len(vlm_description)}")
+                                                logger.debug(
+                                                    "DocxProcessor: VLM completed, description length: %s",
+                                                    len(vlm_description),
+                                                )
                                         except Exception as e:
-                                            print(f"[ERROR] DocxProcessor: VLM failed: {e}")
+                                            logger.error("DocxProcessor: VLM failed: %s", e)
 
                                     # 2) 若VLM失败或为空，且开启高级OCR则尝试高级OCR
                                     if not description and self._use_advanced_ocr and self._advanced_ocr_client:
                                         try:
-                                            print(f"[DEBUG] DocxProcessor: Processing image with GOT-OCR2_0 (file size: {file_size} bytes)")
+                                            logger.debug(
+                                                "DocxProcessor: Processing image with GOT-OCR2_0 (file size: %s bytes)",
+                                                file_size,
+                                            )
                                             ocr_text = self._advanced_ocr_client.recognize_text(temp_image_path)
                                             if ocr_text.strip():  # 只保留非空结果
                                                 description = ocr_text
-                                                print(f"[DEBUG] DocxProcessor: GOT-OCR2_0 completed, text length: {len(ocr_text)}")
+                                                logger.debug(
+                                                    "DocxProcessor: GOT-OCR2_0 completed, text length: %s",
+                                                    len(ocr_text),
+                                                )
                                         except ValueError as e:
-                                            # 文件大小超限或其他值错误
-                                            print(f"[WARNING] DocxProcessor: GOT-OCR2_0 skipped: {e}")
+                                            logger.warning(
+                                                "DocxProcessor: GOT-OCR2_0 skipped: %s",
+                                                e,
+                                            )
                                         except Exception as e:
-                                            # 其他错误
-                                            print(f"[ERROR] DocxProcessor: GOT-OCR2_0 failed: {e}")
+                                            logger.error(
+                                                "DocxProcessor: GOT-OCR2_0 failed: %s",
+                                                e,
+                                            )
 
                                     # 3) 若高级OCR和VLM都失败，使用原有OCR结果
                                     if not description and ocr_result.strip():
                                         description = ocr_result
-                                        print(f"[DEBUG] DocxProcessor: Using original OCR result, length: {len(ocr_result)}")
+                                        logger.debug(
+                                            "DocxProcessor: Using original OCR result, length: %s",
+                                            len(ocr_result),
+                                        )
                                 else:
-                                    print(f"[DEBUG] DocxProcessor: Skipping image (insufficient text: {len(ocr_result.strip())} chars)")
+                                    logger.debug(
+                                        "DocxProcessor: Skipping image (insufficient text: %s chars)",
+                                        len(ocr_result.strip()),
+                                    )
                             except Exception as e:
-                                print(f"[ERROR] DocxProcessor: OCR pre-screening failed: {e}")
+                                logger.error("DocxProcessor: OCR pre-screening failed: %s", e)
                                 # 如果预处理失败，尝试直接使用VLM
                                 if self._vlm_client:
                                     try:
@@ -155,28 +206,36 @@ class DocxProcessor(Processor):
                                         if vlm_description.strip() and len(vlm_description.strip()) >= 20:  # 至少20个字符才认为有效
                                             description = vlm_description
                                             elapsed = time.time() - start_time
-                                            print(f"[DEBUG] DocxProcessor: VLM fallback completed, description length: {len(vlm_description)}, took {elapsed:.2f}s")
+                                            logger.debug(
+                                                "DocxProcessor: VLM fallback completed, description length: %s, took %.2fs",
+                                                len(vlm_description),
+                                                elapsed,
+                                            )
                                         else:
-                                            print(
-                                                f"[WARNING] DocxProcessor: VLM result too short in fallback path, length: {len(vlm_description.strip() if vlm_description else '')}")
+                                            logger.warning(
+                                                "DocxProcessor: VLM result too short in fallback path, length: %s",
+                                                len(vlm_description.strip() if vlm_description else ""),
+                                            )
                                             # 不设置description，这样后面会显示“无法识别图片内容”
                                     except Exception as e:
-                                        print(f"[ERROR] DocxProcessor: VLM fallback failed: {e}")
+                                        logger.error("DocxProcessor: VLM fallback failed: %s", e)
 
                             if description:
                                 markdown_parts.append(
                                     f"\n\n> **image desc**: {description}\n\n")
                                 image_count += 1
                             else:
-                                print(
-                                    f"[WARNING] DocxProcessor: No content extracted for image")
+                                logger.warning("DocxProcessor: No content extracted for image")
                                 markdown_parts.append("\n\n> [无法识别图片内容]\n\n")
 
                             # 清理临时文件
                             temp_image_path.unlink()
                         except Exception as e:
-                            print(
-                                f"[ERROR] DocxProcessor: Error processing image {r_id}: {e}")
+                            logger.error(
+                                "DocxProcessor: Error processing image %s: %s",
+                                r_id,
+                                e,
+                            )
                             markdown_parts.append("\n\n> [图片处理失败]\n\n")
 
                 # Process text
@@ -193,7 +252,9 @@ class DocxProcessor(Processor):
         text_len = len(md)
 
         total_elapsed = time.time() - process_start_time
-        print(f"[DEBUG] DocxProcessor: Processing completed in {total_elapsed:.2f}s")
+        logger.debug(
+            "DocxProcessor: Processing completed in %.2fs", total_elapsed
+        )
         
         return ProcessingResult(
             markdown_content=md,

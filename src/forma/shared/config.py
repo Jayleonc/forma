@@ -80,7 +80,12 @@ def get_ocr_config() -> OcrConfig:
     return OcrConfig(
         api_key=api_key,
         model=os.getenv("OCR_MODEL", "GOT-OCR2_0"),
-        base_url=os.getenv("OCR_BASE_URL", "https://ai.gitee.com"),
+        base_url=(
+            os.getenv("OCR_BASE_URL")
+            or os.getenv("FORMA_BASE_URL")
+            or os.getenv("FORMA_DEFAULT_OCR_BASE_URL")
+            or "https://ai.gitee.com"
+        ),
         max_file_size=int(os.getenv("OCR_MAX_FILE_SIZE",
                           3 * 1024 * 1024)),  # 默认3MB
     )
@@ -104,17 +109,29 @@ def get_llm_config() -> LlmConfig:
 
 
 def get_openai_llm_config() -> LlmConfig:
-    """Load LLM related configuration from environment variables."""
-    api_key = os.getenv("OPENAI_API_KEY")
+    """Load OpenAI LLM configuration from environment variables."""
+
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("FORMA_OPENAI_API_KEY")
     if not api_key:
         raise ValueError(
             "API key not found. Please set OPENAI_API_KEY or FORMA_OPENAI_API_KEY."
         )
 
+    model = os.getenv("OPENAI_LLM_MODEL") or os.getenv("FORMA_OPENAI_MODEL")
+    if not model:
+        model = os.getenv("DEFAULT_OPENAI_LLM_MODEL", "gpt-4o-mini")
+
+    base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("FORMA_OPENAI_BASE_URL")
+    if not base_url:
+        base_url = (
+            os.getenv("FORMA_DEFAULT_OPENAI_BASE_URL")
+            or "https://api.openai.com/v1"
+        )
+
     return LlmConfig(
         api_key=api_key,
-        model="gpt-4o-mini",
-        base_url="https://api.openai.com/v1",
+        model=model,
+        base_url=base_url,
     )
 
 
@@ -138,7 +155,13 @@ def get_embedding_model() -> EmbeddingConfig:
     return EmbeddingConfig(
         api_key=api_key,
         model=os.getenv("EMBEDDING_MODEL", "Qwen3-Embedding-8B"),
-        base_url=os.getenv("FORMA_BASE_URL", "https://api.openai.com/v1"),
+        base_url=(
+            os.getenv("EMBEDDING_BASE_URL")
+            or os.getenv("FORMA_BASE_URL")
+            or os.getenv("FORMA_OPENAI_BASE_URL")
+            or os.getenv("FORMA_DEFAULT_OPENAI_BASE_URL")
+            or "https://api.openai.com/v1"
+        ),
     )
 
 

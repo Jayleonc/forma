@@ -1,8 +1,7 @@
 """批量处理模块，用于高效处理大量图片。"""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar, Generic
+from typing import Callable, Dict, List, Optional, TypeVar, Generic
 
 T = TypeVar('T')
 R = TypeVar('R')

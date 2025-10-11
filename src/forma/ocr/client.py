@@ -19,23 +19,37 @@ class AdvancedOCRClient:
     def __init__(
         self,
         api_key: str,
-        model: str = "GOT-OCR2_0",
+        model: Optional[str] = None,
         base_url: Optional[str] = None,
-        max_file_size: int = 3 * 1024 * 1024  # 默认3MB
+        max_file_size: Optional[int] = None,
     ):
         """
         初始化OCR客户端
         
         Args:
             api_key: API密钥
-            model: OCR模型名称，默认为GOT-OCR2_0
-            base_url: API基础URL，默认为https://ai.gitee.com
-            max_file_size: 最大文件大小（字节），默认为3MB
+            model: OCR模型名称。默认从环境变量OCR_MODEL读取，
+                若未设置则回退到GOT-OCR2_0。
+            base_url: API基础URL。默认依次从环境变量
+                OCR_BASE_URL、FORMA_BASE_URL、FORMA_DEFAULT_OCR_BASE_URL读取，
+                若均未设置则回退到https://ai.gitee.com。
+            max_file_size: 最大文件大小（字节）。默认从环境变量
+                OCR_MAX_FILE_SIZE读取，若未设置则回退到3MB。
         """
         self.api_key = api_key
-        self.model = model
-        self.base_url = base_url or "https://ai.gitee.com"
-        self.max_file_size = max_file_size
+        self.model = model or os.getenv("OCR_MODEL") or "GOT-OCR2_0"
+        resolved_base_url = (
+            base_url
+            or os.getenv("OCR_BASE_URL")
+            or os.getenv("FORMA_BASE_URL")
+            or os.getenv("FORMA_DEFAULT_OCR_BASE_URL")
+            or "https://ai.gitee.com"
+        )
+        self.base_url = resolved_base_url
+        resolved_max_size = max_file_size
+        if resolved_max_size is None:
+            resolved_max_size = int(os.getenv("OCR_MAX_FILE_SIZE", 3 * 1024 * 1024))
+        self.max_file_size = resolved_max_size
         
     def recognize(self, image_path: Union[str, Path]) -> Dict[str, Any]:
         """
@@ -117,7 +131,7 @@ class AdvancedOCRClient:
             else:
                 logger.warning(f"OCR返回了意外的响应格式: {result}")
                 return ""
-        except ValueError as e:
+        except ValueError:
             # 文件不存在或大小超过限制，直接抛出
             raise
         except Exception as e:

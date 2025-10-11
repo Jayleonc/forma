@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import fitz
 import os
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -20,6 +20,9 @@ from ...ocr import ocr_image_file, AdvancedOCRClient
 from ...vision import VLMClient
 from ...shared.config import get_ocr_config
 from .base import ProcessingResult, Processor
+
+
+logger = logging.getLogger(__name__)
 
 
 class PdfProcessor(Processor):
@@ -59,17 +62,32 @@ class PdfProcessor(Processor):
                         base_url=config.base_url,
                         max_file_size=config.max_file_size
                     )
-                    print(f"[DEBUG] PdfProcessor: Advanced OCR client initialized with model {config.model}")
+                    logger.debug(
+                        "PdfProcessor: Advanced OCR client initialized with model %s",
+                        config.model,
+                    )
                 except Exception as e:
-                    print(f"[WARNING] PdfProcessor: Failed to initialize Advanced OCR client: {e}")
+                    logger.warning(
+                        "PdfProcessor: Failed to initialize Advanced OCR client: %s",
+                        e,
+                    )
                     self._advanced_ocr_client = None
 
     def _describe_with_retry(self, image_path: Path, image_index: int) -> str:
         """使用重试机制调用VLM服务描述图片"""
         
-        @retry(max_tries=3, delay=1.0, backoff=2.0, 
-               exceptions=(Exception,),
-               on_retry=lambda e, i: print(f"[WARNING] PdfProcessor: VLM retry {i}/3 for image {image_index} due to: {e}"))
+        @retry(
+            max_tries=3,
+            delay=1.0,
+            backoff=2.0,
+            exceptions=(Exception,),
+            on_retry=lambda e, i: logger.warning(
+                "PdfProcessor: VLM retry %s/3 for image %s due to: %s",
+                i,
+                image_index,
+                e,
+            ),
+        )
         def _describe(path, prompt):
             return self._vlm_client.describe(path, prompt_name=prompt)
         
@@ -78,9 +96,18 @@ class PdfProcessor(Processor):
     def _recognize_text_with_retry(self, image_path: Path, image_index: int) -> str:
         """使用重试机制调用高级OCR服务识别图片文字"""
         
-        @retry(max_tries=3, delay=1.0, backoff=2.0, 
-               exceptions=(Exception,),
-               on_retry=lambda e, i: print(f"[WARNING] PdfProcessor: GOT-OCR2_0 retry {i}/3 for image {image_index} due to: {e}"))
+        @retry(
+            max_tries=3,
+            delay=1.0,
+            backoff=2.0,
+            exceptions=(Exception,),
+            on_retry=lambda e, i: logger.warning(
+                "PdfProcessor: GOT-OCR2_0 retry %s/3 for image %s due to: %s",
+                i,
+                image_index,
+                e,
+            ),
+        )
         def _recognize(path):
             return self._advanced_ocr_client.recognize_text(path)
         
@@ -111,51 +138,71 @@ class PdfProcessor(Processor):
     def process(self, input_path: Path) -> ProcessingResult:
         """处理PDF文件，返回处理结果"""
         process_start_time = time.time()
-        print(f"[DEBUG] PdfProcessor: Starting to process {input_path}")
+        logger.debug("PdfProcessor: Starting to process %s", input_path)
         path = Path(input_path)
 
         try:
-            print(
-                f"[DEBUG] PdfProcessor: Converting PDF to markdown with pymupdf4llm")
+            logger.debug(
+                "PdfProcessor: Converting PDF to markdown with pymupdf4llm"
+            )
             base_md = pymupdf4llm.to_markdown(str(path))
             text_len = len(base_md.strip())
-            print(
-                f"[DEBUG] PdfProcessor: Base markdown extracted, length: {text_len} characters")
+            logger.debug(
+                "PdfProcessor: Base markdown extracted, length: %s characters",
+                text_len,
+            )
         except Exception as e:
-            print(
-                f"[ERROR] PdfProcessor: Failed to convert PDF to markdown: {e.__class__.__name__}: {e}")
+            logger.error(
+                "PdfProcessor: Failed to convert PDF to markdown: %s: %s",
+                e.__class__.__name__,
+                e,
+            )
             # 处理特定的 PyMuPDF textpage 错误
             if "not a textpage of this page" in str(e).lower():
-                print("[WARNING] PdfProcessor: Encountered 'not a textpage of this page' error, using fallback extraction")
+                logger.warning(
+                    "PdfProcessor: Encountered 'not a textpage of this page' error, using fallback extraction"
+                )
                 base_md = self._fallback_extract_markdown(path)
                 text_len = len(base_md.strip())
-                print(f"[DEBUG] PdfProcessor: Fallback markdown extracted, length: {text_len} characters")
+                logger.debug(
+                    "PdfProcessor: Fallback markdown extracted, length: %s characters",
+                    text_len,
+                )
             else:
                 raise
 
         try:
-            print(f"[DEBUG] PdfProcessor: Opening PDF with fitz (PyMuPDF)")
+            logger.debug("PdfProcessor: Opening PDF with fitz (PyMuPDF)")
             doc = fitz.open(str(path))
-            print(
-                f"[DEBUG] PdfProcessor: PDF opened successfully, pages: {len(doc)}")
+            logger.debug(
+                "PdfProcessor: PDF opened successfully, pages: %s", len(doc)
+            )
 
             # 存储图片信息，包括路径和位置信息
             image_info: List[Dict[str, Any]] = []
 
             with tempfile.TemporaryDirectory() as tmpdir:
                 tmp = Path(tmpdir)
-                print(f"[DEBUG] PdfProcessor: Created temp directory: {tmp}")
+                logger.debug("PdfProcessor: Created temp directory: %s", tmp)
 
                 # 提取所有图片并记录它们的页码和索引
                 for page_index, page in enumerate(doc):
                     images = page.get_images(full=True)
-                    print(
-                        f"[DEBUG] PdfProcessor: Page {page_index+1}/{len(doc)} has {len(images)} images")
+                    logger.debug(
+                        "PdfProcessor: Page %s/%s has %s images",
+                        page_index + 1,
+                        len(doc),
+                        len(images),
+                    )
 
                     for img_index, img in enumerate(images):
                         xref = img[0]
-                        print(
-                            f"[DEBUG] PdfProcessor: Extracting image {img_index+1}/{len(images)} from page {page_index+1}")
+                        logger.debug(
+                            "PdfProcessor: Extracting image %s/%s from page %s",
+                            img_index + 1,
+                            len(images),
+                            page_index + 1,
+                        )
                         base_image = doc.extract_image(xref)
                         ext = base_image.get("ext", "png")
                         img_bytes = base_image["image"]
@@ -168,13 +215,13 @@ class PdfProcessor(Processor):
                             "page": page_index,
                             "index": img_index,
                         })
-                        print(
-                            f"[DEBUG] PdfProcessor: Saved image to {img_path}")
+                        logger.debug("PdfProcessor: Saved image to %s", img_path)
 
-                print(f"[DEBUG] PdfProcessor: Closing PDF document")
+                logger.debug("PdfProcessor: Closing PDF document")
                 doc.close()
-                print(
-                    f"[DEBUG] PdfProcessor: Extracted {len(image_info)} images total")
+                logger.debug(
+                    "PdfProcessor: Extracted %s images total", len(image_info)
+                )
 
                 # 处理图片内容
                 image_descriptions: List[Tuple[Path, str, Dict[str, Any]]] = []
@@ -182,12 +229,15 @@ class PdfProcessor(Processor):
                 if image_info:
                     # 使用OCR预处理所有图片，获取文本内容
                     ocr_results = {}
-                    print(f"[DEBUG] PdfProcessor: Pre-screening images with OCR")
-                    
+                    logger.debug("PdfProcessor: Pre-screening images with OCR")
+
                     # 使用更大的线程池处理OCR预处理
                     max_workers = min(32, os.cpu_count() * 4)  # 限制最大线程数，避免资源耗尽
-                    print(f"[DEBUG] PdfProcessor: Using thread pool with {max_workers} workers for OCR pre-screening")
-                    
+                    logger.debug(
+                        "PdfProcessor: Using thread pool with %s workers for OCR pre-screening",
+                        max_workers,
+                    )
+
                     with ThreadPoolExecutor(max_workers=max_workers) as executor:
                         futures = [
                             executor.submit(ocr_image_file, str(info["path"]))
@@ -197,30 +247,43 @@ class PdfProcessor(Processor):
                             try:
                                 result = future.result()
                                 ocr_results[i] = result
-                                print(
-                                    f"[DEBUG] PdfProcessor: OCR pre-screening completed for image {i+1}/{len(image_info)}, text length: {len(result)}")
+                                logger.debug(
+                                    "PdfProcessor: OCR pre-screening completed for image %s/%s, text length: %s",
+                                    i + 1,
+                                    len(image_info),
+                                    len(result),
+                                )
                             except Exception as e:
-                                print(
-                                    f"[ERROR] PdfProcessor: OCR pre-screening failed for an image: {e.__class__.__name__}: {e}")
+                                logger.error(
+                                    "PdfProcessor: OCR pre-screening failed for an image: %s: %s",
+                                    e.__class__.__name__,
+                                    e,
+                                )
                                 ocr_results[i] = ""
 
                     if self._use_ocr:
                         # 使用OCR处理图片
-                        print(f"[DEBUG] PdfProcessor: Using OCR results directly")
+                        logger.debug("PdfProcessor: Using OCR results directly")
                         for i, result in ocr_results.items():
                             if result.strip():  # 只保留非空结果
                                 image_descriptions.append(
                                     (image_info[i]["path"], result, image_info[i]))
                     else:
                         # 使用原有OCR预处理结果判断图片是否值得进一步处理
-                        print(f"[DEBUG] PdfProcessor: Processing images with VLM first, then Advanced OCR if enabled (advanced={'ON' if self._use_advanced_ocr and self._advanced_ocr_client else 'OFF'})")
+                        logger.debug(
+                            "PdfProcessor: Processing images with VLM first, then Advanced OCR if enabled (advanced=%s)",
+                            "ON" if self._use_advanced_ocr and self._advanced_ocr_client else "OFF",
+                        )
                         # 筛选出有足够文字的图片进行处理
                         valid_images = []
                         for i, result in ocr_results.items():
                             if len(result.strip()) >= self._min_text_chars:
                                 valid_images.append((i, image_info[i]["path"], result))
-                        
-                        print(f"[DEBUG] PdfProcessor: Found {len(valid_images)} images with sufficient text for further processing")
+
+                        logger.debug(
+                            "PdfProcessor: Found %s images with sufficient text for further processing",
+                            len(valid_images),
+                        )
                         
                         if valid_images:
                             # 使用批量处理器并发处理图片
@@ -242,43 +305,80 @@ class PdfProcessor(Processor):
                                         with Image.open(img_path) as img:
                                             width, height = img.size
                                             if width < 30 or height < 30:  # 设置一个安全的最小尺寸
-                                                print(f"[INFO] PdfProcessor: Image {i+1} is too small: {width}x{height}, skipping VLM processing")
+                                                logger.info(
+                                                    "PdfProcessor: Image %s is too small: %sx%s, skipping VLM processing",
+                                                    i + 1,
+                                                    width,
+                                                    height,
+                                                )
                                                 skip_vlm = True  # 标记跳过 VLM 处理
                                     except ImportError:
-                                        print("[WARNING] PdfProcessor: PIL not installed, skipping image size check")
+                                        logger.warning(
+                                            "PdfProcessor: PIL not installed, skipping image size check"
+                                        )
                                     except Exception as e:
-                                        print(f"[WARNING] PdfProcessor: Failed to check image size: {e}")
+                                        logger.warning(
+                                            "PdfProcessor: Failed to check image size: %s",
+                                            e,
+                                        )
                                         # 如果无法检查尺寸，我们不跳过处理
-                                    
+
                                     # 只有当图像尺寸足够大时，才调用 VLM
                                     if not skip_vlm:
                                         try:
-                                            print(f"[DEBUG] PdfProcessor: Processing image {i+1} with VLM (OCR text length: {len(ocr_result)})")
+                                            logger.debug(
+                                                "PdfProcessor: Processing image %s with VLM (OCR text length: %s)",
+                                                i + 1,
+                                                len(ocr_result),
+                                            )
                                             description = self._describe_with_retry(img_path, i+1)
                                             if description.strip():  # 只保留非空结果
                                                 elapsed = time.time() - start_time
                                                 return ("vlm", description, elapsed)
                                         except Exception as e:
-                                            print(f"[ERROR] PdfProcessor: VLM failed for image {i+1}: {e}")
+                                            logger.error(
+                                                "PdfProcessor: VLM failed for image %s: %s",
+                                                i + 1,
+                                                e,
+                                            )
                                     else:
-                                        print(f"[INFO] PdfProcessor: Skipped VLM for image {i+1} due to small size")
+                                        logger.info(
+                                            "PdfProcessor: Skipped VLM for image %s due to small size",
+                                            i + 1,
+                                        )
 
                                 # 若VLM失败，且开启高级OCR，则尝试高级OCR
                                 if self._use_advanced_ocr and self._advanced_ocr_client:
                                     try:
-                                        print(f"[DEBUG] PdfProcessor: Processing image {i+1} with GOT-OCR2_0 (file size: {file_size} bytes)")
+                                        logger.debug(
+                                            "PdfProcessor: Processing image %s with GOT-OCR2_0 (file size: %s bytes)",
+                                            i + 1,
+                                            file_size,
+                                        )
                                         ocr_text = self._recognize_text_with_retry(img_path, i+1)
                                         if ocr_text.strip():
                                             elapsed = time.time() - start_time
                                             return ("ocr", ocr_text, elapsed)
                                     except ValueError as e:
-                                        print(f"[WARNING] PdfProcessor: GOT-OCR2_0 skipped for image {i+1}: {e}")
+                                        logger.warning(
+                                            "PdfProcessor: GOT-OCR2_0 skipped for image %s: %s",
+                                            i + 1,
+                                            e,
+                                        )
                                     except Exception as e:
-                                        print(f"[ERROR] PdfProcessor: GOT-OCR2_0 failed for image {i+1}: {e}")
+                                        logger.error(
+                                            "PdfProcessor: GOT-OCR2_0 failed for image %s: %s",
+                                            i + 1,
+                                            e,
+                                        )
 
                                 # 如果VLM和（可选）高级OCR都失败，使用原始OCR结果
                                 if len(ocr_result.strip()) >= self._min_text_chars:
-                                    print(f"[DEBUG] PdfProcessor: Using original OCR result for image {i+1} (length: {len(ocr_result)})")
+                                    logger.debug(
+                                        "PdfProcessor: Using original OCR result for image %s (length: %s)",
+                                        i + 1,
+                                        len(ocr_result),
+                                    )
                                     return ("basic_ocr", ocr_result, 0.0)
                                 # 若不足阈值，不返回内容
                                 return ("skip", "", 0.0)
@@ -291,17 +391,35 @@ class PdfProcessor(Processor):
                                     # 跳过无内容结果
                                     return
                                 if source == "vlm":
-                                    print(f"[DEBUG] PdfProcessor: VLM completed for image {i+1}, description length: {len(text)}, took {elapsed:.2f}s")
+                                    logger.debug(
+                                        "PdfProcessor: VLM completed for image %s, description length: %s, took %.2fs",
+                                        i + 1,
+                                        len(text),
+                                        elapsed,
+                                    )
                                 elif source == "ocr":
-                                    print(f"[DEBUG] PdfProcessor: GOT-OCR2_0 completed for image {i+1}, text length: {len(text)}, took {elapsed:.2f}s")
+                                    logger.debug(
+                                        "PdfProcessor: GOT-OCR2_0 completed for image %s, text length: %s, took %.2fs",
+                                        i + 1,
+                                        len(text),
+                                        elapsed,
+                                    )
                                 else:
-                                    print(f"[DEBUG] PdfProcessor: Using original OCR result for image {i+1}, length: {len(text)}")
+                                    logger.debug(
+                                        "PdfProcessor: Using original OCR result for image %s, length: %s",
+                                        i + 1,
+                                        len(text),
+                                    )
                                 image_descriptions.append((Path(img_path), text, image_info[i]))
-                            
+
                             # 定义错误回调
                             def on_error(idx, item, error):
                                 i, img_path, ocr_result = item
-                                print(f"[ERROR] PdfProcessor: Failed to process image {i+1}: {error}")
+                                logger.error(
+                                    "PdfProcessor: Failed to process image %s: %s",
+                                    i + 1,
+                                    error,
+                                )
                                 if len(ocr_result.strip()) >= 5:  # 至少有5个字符才保留
                                     image_descriptions.append((Path(img_path), ocr_result, image_info[i]))
                             
@@ -314,16 +432,22 @@ class PdfProcessor(Processor):
                             )
 
         except Exception as e:
-            print(
-                f"[ERROR] PdfProcessor: Error processing PDF: {e.__class__.__name__}: {e}")
+            logger.error(
+                "PdfProcessor: Error processing PDF: %s: %s",
+                e.__class__.__name__,
+                e,
+            )
             raise
 
-        print(f"[DEBUG] PdfProcessor: Finalizing markdown content")
+        logger.debug("PdfProcessor: Finalizing markdown content")
         markdown = base_md
 
         # 如果有图片描述，将它们插入到markdown中的适当位置
         if image_descriptions:
-            print(f"[DEBUG] PdfProcessor: Adding {len(image_descriptions)} image descriptions to markdown")
+            logger.debug(
+                "PdfProcessor: Adding %s image descriptions to markdown",
+                len(image_descriptions),
+            )
             
             # 创建一个文档结构，用于插入图片描述
             doc_structure = {}
@@ -370,20 +494,29 @@ class PdfProcessor(Processor):
                 markdown = ''.join(result_parts)
             else:
                 # 如果没有找到页码标记，将所有图片描述添加到文档末尾
-                print(f"[DEBUG] PdfProcessor: No page markers found, appending all image descriptions to the end")
+                logger.debug(
+                    "PdfProcessor: No page markers found, appending all image descriptions to the end"
+                )
                 for i, (img_path, description, _) in enumerate(image_descriptions):
                     image_marker = f"\n\n> **image desc {i+1}**: {description}\n\n"
                     markdown += image_marker
 
-            print(
-                f"[DEBUG] PdfProcessor: Final markdown length with image descriptions: {len(markdown)} characters")
+            logger.debug(
+                "PdfProcessor: Final markdown length with image descriptions: %s characters",
+                len(markdown),
+            )
         else:
-            print(
-                f"[DEBUG] PdfProcessor: No image descriptions to add, final markdown length: {len(markdown)} characters")
+            logger.debug(
+                "PdfProcessor: No image descriptions to add, final markdown length: %s characters",
+                len(markdown),
+            )
 
         low_conf = text_len < 50
-        print(
-            f"[DEBUG] PdfProcessor: Confidence assessment: {'LOW' if low_conf else 'HIGH'} (text length: {text_len})")
+        logger.debug(
+            "PdfProcessor: Confidence assessment: %s (text length: %s)",
+            "LOW" if low_conf else "HIGH",
+            text_len,
+        )
 
         result = ProcessingResult(
             markdown_content=markdown,
@@ -392,7 +525,10 @@ class PdfProcessor(Processor):
             low_confidence=low_conf,
         )
         total_elapsed = time.time() - process_start_time
-        print(f"[DEBUG] PdfProcessor: Processing completed successfully in {total_elapsed:.2f}s")
+        logger.debug(
+            "PdfProcessor: Processing completed successfully in %.2fs",
+            total_elapsed,
+        )
         return result
 
 

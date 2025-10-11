@@ -6,7 +6,11 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Dict
 
+import logging
 import yaml
+
+
+logger = logging.getLogger(__name__)
 
 
 class PromptManager:
@@ -103,26 +107,33 @@ class PromptManager:
                 }
             
             # 打印已加载的提示词列表
-            print(f"[DEBUG] Successfully loaded {len(self._prompts)} prompts: {', '.join(self._prompts.keys())}")
+            logger.debug(
+                "Successfully loaded %s prompts: %s",
+                len(self._prompts),
+                ", ".join(self._prompts.keys()),
+            )
             
             # 检查是否有关键提示词缺失
             key_prompts = ["default_image_description", "pdf_image_description", "docx_image_description"]
             missing_prompts = [p for p in key_prompts if p not in self._prompts]
             if missing_prompts:
-                print(f"[WARNING] Some key prompts are missing: {', '.join(missing_prompts)}")
+                logger.warning(
+                    "Some key prompts are missing: %s",
+                    ", ".join(missing_prompts),
+                )
             else:
-                print(f"[DEBUG] All key prompts are loaded successfully.")
+                logger.debug("All key prompts are loaded successfully.")
         except FileNotFoundError:
             # 文件不存在时，保持 _prompts 为空字典
-            print(f"[WARNING] prompts.yaml file not found at {root / 'prompts.yaml'}")
+            logger.warning("prompts.yaml file not found at %s", root / "prompts.yaml")
             # self._prompts 已在 __new__ 中初始化为空字典
         except (yaml.YAMLError, ValueError) as e:
             # 处理 YAML 格式错误或结构不正确的情况
-            print(f"[ERROR] Failed to load or parse prompts.yaml: {e}")
+            logger.error("Failed to load or parse prompts.yaml: %s", e)
             # 保持 _prompts 为空字典，而不是抛出异常
         except Exception as e:
             # 捕获所有其他异常，确保不会影响程序的正常运行
-            print(f"[ERROR] Unexpected error when loading prompts.yaml: {e}")
+            logger.error("Unexpected error when loading prompts.yaml: %s", e)
             # self._prompts 已在 __new__ 中初始化为空字典
 
     def get_prompt(self, name: str) -> Dict[str, Any]:
