@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 import tempfile
 from pathlib import Path
 from typing import List, Optional
 
-from pptx import Presentation
-from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 from .base import Processor, ProcessingResult
 from ...ocr import parse_image_to_markdown, AdvancedOCRClient
@@ -18,6 +17,9 @@ from ...shared.utils.converters import convert_to_pdf
 from ...shared.config import get_ocr_config
 from ...shared.utils.retry import retry
 import fitz  # PyMuPDF
+
+
+logger = logging.getLogger(__name__)
 
 
 class PptxProcessor(Processor):
@@ -48,17 +50,32 @@ class PptxProcessor(Processor):
                         base_url=config.base_url,
                         max_file_size=config.max_file_size
                     )
-                    print(f"[DEBUG] PptxProcessor: Advanced OCR client initialized with model {config.model}")
+                    logger.debug(
+                        "PptxProcessor: Advanced OCR client initialized with model %s",
+                        config.model,
+                    )
                 except Exception as e:
-                    print(f"[WARNING] PptxProcessor: Failed to initialize Advanced OCR client: {e}")
+                    logger.warning(
+                        "PptxProcessor: Failed to initialize Advanced OCR client: %s",
+                        e,
+                    )
                     self._advanced_ocr_client = None
 
     def _parse_with_retry(self, image_path: Path, slide_idx: int) -> str:
         """使用重试机制调用VLM服务解析幻灯片"""
         
-        @retry(max_tries=3, delay=1.0, backoff=2.0, 
-               exceptions=(Exception,),
-               on_retry=lambda e, i: print(f"[WARNING] PptxProcessor: VLM retry {i}/3 for slide {slide_idx+1} due to: {e}"))
+        @retry(
+            max_tries=3,
+            delay=1.0,
+            backoff=2.0,
+            exceptions=(Exception,),
+            on_retry=lambda e, i: logger.warning(
+                "PptxProcessor: VLM retry %s/3 for slide %s due to: %s",
+                i,
+                slide_idx + 1,
+                e,
+            ),
+        )
         def _parse(path):
             from ...vision import VlmParser
             vlm = VlmParser(self._vlm_client)
@@ -69,9 +86,18 @@ class PptxProcessor(Processor):
     def _recognize_text_with_retry(self, image_path: Path, slide_idx: int) -> str:
         """使用重试机制调用高级OCR服务识别图片文字"""
         
-        @retry(max_tries=3, delay=1.0, backoff=2.0, 
-               exceptions=(Exception,),
-               on_retry=lambda e, i: print(f"[WARNING] PptxProcessor: GOT-OCR2_0 retry {i}/3 for slide {slide_idx+1} due to: {e}"))
+        @retry(
+            max_tries=3,
+            delay=1.0,
+            backoff=2.0,
+            exceptions=(Exception,),
+            on_retry=lambda e, i: logger.warning(
+                "PptxProcessor: GOT-OCR2_0 retry %s/3 for slide %s due to: %s",
+                i,
+                slide_idx + 1,
+                e,
+            ),
+        )
         def _recognize(path):
             return self._advanced_ocr_client.recognize_text(path)
         
@@ -175,48 +201,90 @@ class PptxProcessor(Processor):
                         # 1) VLM 优先
                         if self._vlm_client:
                             try:
-                                print(f"[DEBUG] PptxProcessor: Processing slide {idx+1} with VLM")
+                                logger.debug(
+                                    "PptxProcessor: Processing slide %s with VLM",
+                                    idx + 1,
+                                )
                                 vlm_markdown = vlm.parse(img_path)
                                 if vlm_markdown.strip():
                                     final_markdown = vlm_markdown
-                                    print(f"[DEBUG] PptxProcessor: VLM completed for slide {idx+1}, text length: {len(vlm_markdown)}")
+                                    logger.debug(
+                                        "PptxProcessor: VLM completed for slide %s, text length: %s",
+                                        idx + 1,
+                                        len(vlm_markdown),
+                                    )
                                 else:
-                                    print(f"[DEBUG] PptxProcessor: VLM returned empty result for slide {idx+1}")
+                                    logger.debug(
+                                        "PptxProcessor: VLM returned empty result for slide %s",
+                                        idx + 1,
+                                    )
                             except Exception as e:
-                                print(f"[ERROR] PptxProcessor: VLM failed for slide {idx+1}: {e}")
+                                logger.error(
+                                    "PptxProcessor: VLM failed for slide %s: %s",
+                                    idx + 1,
+                                    e,
+                                )
 
                         # 2) 若VLM失败或为空，且开启高级OCR，则尝试高级OCR
                         if not final_markdown and self._use_advanced_ocr and self._advanced_ocr_client:
                             try:
-                                print(f"[DEBUG] PptxProcessor: Processing slide {idx+1} with GOT-OCR2_0 (file size: {file_size} bytes)")
+                                logger.debug(
+                                    "PptxProcessor: Processing slide %s with GOT-OCR2_0 (file size: %s bytes)",
+                                    idx + 1,
+                                    file_size,
+                                )
                                 ocr_text = self._advanced_ocr_client.recognize_text(img_path)
                                 if ocr_text.strip():
                                     final_markdown = ocr_text
-                                    print(f"[DEBUG] PptxProcessor: GOT-OCR2_0 completed for slide {idx+1}, text length: {len(ocr_text)}")
+                                    logger.debug(
+                                        "PptxProcessor: GOT-OCR2_0 completed for slide %s, text length: %s",
+                                        idx + 1,
+                                        len(ocr_text),
+                                    )
                                 else:
-                                    print(f"[DEBUG] PptxProcessor: GOT-OCR2_0 returned empty result for slide {idx+1}")
+                                    logger.debug(
+                                        "PptxProcessor: GOT-OCR2_0 returned empty result for slide %s",
+                                        idx + 1,
+                                    )
                             except ValueError as e:
-                                print(f"[WARNING] PptxProcessor: GOT-OCR2_0 skipped for slide {idx+1}: {e}")
+                                logger.warning(
+                                    "PptxProcessor: GOT-OCR2_0 skipped for slide %s: %s",
+                                    idx + 1,
+                                    e,
+                                )
                             except Exception as e:
-                                print(f"[ERROR] PptxProcessor: GOT-OCR2_0 failed for slide {idx+1}: {e}")
+                                logger.error(
+                                    "PptxProcessor: GOT-OCR2_0 failed for slide %s: %s",
+                                    idx + 1,
+                                    e,
+                                )
                         # 3) 快速路径文本兜底
                         if not final_markdown:
                             fast_path_text = complex_slide_texts.get(idx, "")
                             if fast_path_text:
                                 final_markdown = fast_path_text
-                                print(f"[DEBUG] PptxProcessor: Using fast-path text for slide {idx+1}, length: {len(fast_path_text)}")
+                                logger.debug(
+                                    "PptxProcessor: Using fast-path text for slide %s, length: %s",
+                                    idx + 1,
+                                    len(fast_path_text),
+                                )
                             else:
                                 final_markdown = "> _[提示] 无法解析此幻灯片内容。_"
-                                print(f"[WARNING] PptxProcessor: No content extracted for slide {idx+1}")
+                                logger.warning(
+                                    "PptxProcessor: No content extracted for slide %s",
+                                    idx + 1,
+                                )
                         else:
                             # 如果有快速路径文本，并且与最终结果不重复，则合并
                             fast_path_text = complex_slide_texts.get(idx, "")
                             if fast_path_text and fast_path_text not in final_markdown:
                                 final_markdown = f"{fast_path_text}\n\n{final_markdown}"
-                        
+
                         slide_markdowns[idx] = final_markdown
                         image_count += 1
-                        print(f"[DEBUG] PptxProcessor: Completed processing slide {idx+1}")
+                        logger.debug(
+                            "PptxProcessor: Completed processing slide %s", idx + 1
+                        )
 
                     doc.close()
 
@@ -227,7 +295,7 @@ class PptxProcessor(Processor):
                         f"> _[提示] 深度解析失败: {e}_\n"
                         f"> _请确保已正确安装 LibreOffice。_"
                     )
-                    print(f"[ERROR] PptxProcessor: Deep parsing failed: {e}")
+                    logger.error("PptxProcessor: Deep parsing failed: %s", e)
                     for idx in complex_indices:
                         if not slide_markdowns[idx]: # Avoid overwriting fallback text
                             slide_markdowns[idx] = error_msg
@@ -235,7 +303,9 @@ class PptxProcessor(Processor):
         markdown = "\n\n---\n\n".join(m for m in slide_markdowns if m)
         text_len = len(markdown.strip())
         total_elapsed = time.time() - process_start_time
-        print(f"[DEBUG] PptxProcessor: Processing completed in {total_elapsed:.2f}s")
+        logger.debug(
+            "PptxProcessor: Processing completed in %.2fs", total_elapsed
+        )
         
         return ProcessingResult(
             markdown_content=markdown,

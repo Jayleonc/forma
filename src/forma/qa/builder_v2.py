@@ -4,24 +4,25 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, DefaultDict, Tuple
 from collections import defaultdict
-import json
 import time
 import concurrent.futures
-from functools import partial
-import numpy as np
+import logging
 
 from langchain.output_parsers import PydanticOutputParser, OutputFixingParser
 from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
-from ..shared.config import get_llm_config, get_embedding_model
+from ..shared.config import get_llm_config
 from ..shared.prompts import PromptManager
 from ..shared.models import (
     Chunk,
     DistilledKnowledge,
     EnrichedChunk,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class HierarchicalKnowledgeBuilder:
@@ -147,19 +148,25 @@ class HierarchicalKnowledgeBuilder:
         if not parent_summary:
             # 如果是根节点，提供一个默认提示
             parent_summary = "这是一个顶级章节，没有父级内容。"
-            print(f"[DEBUG] 节点 {chunk.chunk_id} 是根节点，使用默认父级摘要")
+            logger.debug("节点 %s 是根节点，使用默认父级摘要", chunk.chunk_id)
         else:
             parent_summary = parent_summary[:self.parent_summary_max_length]
-            print(
-                f"[DEBUG] 节点 {chunk.chunk_id} 使用父级摘要: {parent_summary[:50]}...")
+            logger.debug(
+                "节点 %s 使用父级摘要: %s...",
+                chunk.chunk_id,
+                parent_summary[:50],
+            )
 
         # 若文本过短/几乎为空，直接返回最小占位知识，避免模型产生占位说明或解析错误
         plain_text = (chunk.text or "").strip()
         if len(plain_text) < 20:
             minimal_summary = header_chain.split(
                 " > ")[-1] if header_chain else plain_text
-            print(
-                f"[INFO] 节点 {chunk.chunk_id} 文本过短（{len(plain_text)} 字），跳过LLM调用，返回最小知识占位")
+            logger.info(
+                "节点 %s 文本过短（%s 字），跳过LLM调用，返回最小知识占位",
+                chunk.chunk_id,
+                len(plain_text),
+            )
             knowledge = DistilledKnowledge(
                 summary=minimal_summary,
                 qa_pairs=[],
@@ -170,7 +177,7 @@ class HierarchicalKnowledgeBuilder:
 
         try:
             # 调用大模型提炼知识，注入层级路径和父级摘要
-            print(f"[INFO] 开始处理节点 {chunk.chunk_id}")
+            logger.info("开始处理节点 %s", chunk.chunk_id)
             # 先做字符级的保守截断，兼顾速度与信息密度
             truncated_text = plain_text[:self.chunk_max_length]
 
@@ -222,10 +229,15 @@ class HierarchicalKnowledgeBuilder:
             safe_truncated_text = self._truncate_by_tokens(truncated_text, max_chunk_tokens)
 
             # 打印调试信息便于排查
-            print(
-                f"[DEBUG] Token预算: total={self.model_context_tokens}, reserve={self.token_reserve}, "
-                f"parent≈{parent_tokens}, header≈{header_tokens}, fmt≈{fmt_tokens}, "
-                f"chunk_budget≈{max_chunk_tokens}, chunk_chars={len(safe_truncated_text)}"
+            logger.debug(
+                "Token预算: total=%s, reserve=%s, parent≈%s, header≈%s, fmt≈%s, chunk_budget≈%s, chunk_chars=%s",
+                self.model_context_tokens,
+                self.token_reserve,
+                parent_tokens,
+                header_tokens,
+                fmt_tokens,
+                max_chunk_tokens,
+                len(safe_truncated_text),
             )
             response = chain.invoke(
                 {
@@ -240,15 +252,20 @@ class HierarchicalKnowledgeBuilder:
             # 处理响应结果
             if isinstance(response, DistilledKnowledge):
                 knowledge = response
-                print(
-                    f"[INFO] 节点 {chunk.chunk_id} 提炼成功，生成了 {len(knowledge.qa_pairs)} 个QA对")
+                logger.info(
+                    "节点 %s 提炼成功，生成了 %s 个QA对",
+                    chunk.chunk_id,
+                    len(knowledge.qa_pairs),
+                )
             else:
-                print(f"[WARNING] 节点 {chunk.chunk_id} 提炼结果类型不正确，使用空知识占位")
+                logger.warning(
+                    "节点 %s 提炼结果类型不正确，使用空知识占位", chunk.chunk_id
+                )
                 knowledge = DistilledKnowledge(
                     summary="", qa_pairs=[], hypothetical_questions=[], entities={}
                 )
         except Exception as e:
-            print(f"[ERROR] 知识提炼步骤出错 (chunk: {chunk.chunk_id}): {e}")
+            logger.error("知识提炼步骤出错 (chunk: %s): %s", chunk.chunk_id, e)
             knowledge = DistilledKnowledge(
                 summary="", qa_pairs=[], hypothetical_questions=[], entities={}
             )
@@ -285,8 +302,11 @@ class HierarchicalKnowledgeBuilder:
             else:
                 roots.append(ch)
 
-        print(
-            f"[DEBUG] 构建了层级树: {len(roots)} 个根节点, {len(children_map)} 个有子节点的节点")
+        logger.debug(
+            "构建了层级树: %s 个根节点, %s 个有子节点的节点",
+            len(roots),
+            len(children_map),
+        )
 
         # 2. 初始化结果容器和状态缓存
         enriched: List[EnrichedChunk] = []
@@ -316,8 +336,14 @@ class HierarchicalKnowledgeBuilder:
                 progress = len(enriched) / len(chunks) * 100
                 eta = elapsed / max(len(enriched), 1) * \
                     (len(chunks) - len(enriched))
-                print(
-                    f"[进度] {progress:.1f}% 完成 ({len(enriched)}/{len(chunks)}) | 已用时间: {elapsed:.1f}秒 | 预计剩余: {eta:.1f}秒")
+                logger.info(
+                    "进度 %.1f%% 完成 (%s/%s) | 已用时间: %.1f秒 | 预计剩余: %.1f秒",
+                    progress,
+                    len(enriched),
+                    len(chunks),
+                    elapsed,
+                    eta,
+                )
 
             return enriched_node
 
@@ -326,7 +352,7 @@ class HierarchicalKnowledgeBuilder:
         level = 0
 
         while current_level_nodes:
-            print(f"[INFO] 处理第 {level} 层，共 {len(current_level_nodes)} 个节点")
+            logger.info("处理第 %s 层，共 %s 个节点", level, len(current_level_nodes))
 
             # 为当前层级的每个节点准备父级摘要
             node_with_parent_summary: List[Tuple[Chunk, str]] = []
@@ -336,8 +362,9 @@ class HierarchicalKnowledgeBuilder:
                 if parent_id and parent_id in summary_cache:
                     parent_summary = summary_cache[parent_id]
                 elif parent_id:
-                    print(
-                        f"[WARNING] 节点 {node.chunk_id} 的父节点 {parent_id} 未找到摘要")
+                    logger.warning(
+                        "节点 %s 的父节点 %s 未找到摘要", node.chunk_id, parent_id
+                    )
                 node_with_parent_summary.append((node, parent_summary))
 
             # 并行处理当前层级的所有节点
@@ -352,7 +379,7 @@ class HierarchicalKnowledgeBuilder:
                     try:
                         future.result()  # 获取结果，但我们已经在_process_node中处理了
                     except Exception as e:
-                        print(f"[ERROR] 处理节点 {node.chunk_id} 时出错: {e}")
+                        logger.error("处理节点 %s 时出错: %s", node.chunk_id, e)
 
             # 收集下一层的所有节点
             next_level_nodes: List[Chunk] = []
@@ -366,13 +393,18 @@ class HierarchicalKnowledgeBuilder:
 
         # 5. 开始BFS层级处理
         self.start_time = time.time()
-        print(f"[INFO] 开始BFS并行层级化知识提炼，从 {len(roots)} 个根节点开始...")
+        logger.info(
+            "开始BFS并行层级化知识提炼，从 %s 个根节点开始...", len(roots)
+        )
 
         # BFS处理逻辑已在上面实现
 
         elapsed = time.time() - self.start_time
-        print(
-            f"[INFO] BFS层级化知识提炼完成，共处理 {len(enriched)} 个节点，耗时 {elapsed:.2f} 秒")
+        logger.info(
+            "BFS层级化知识提炼完成，共处理 %s 个节点，耗时 %.2f 秒",
+            len(enriched),
+            elapsed,
+        )
         return enriched
 
 
@@ -398,16 +430,22 @@ class HierarchicalKnowledgeBuilder:
             self.max_workers = max_workers
 
         total_start_time = time.time()
-        print(
-            f"[INFO] 开始层级化知识构建流程，共有 {len(chunks)} 个文本块待处理，并行线程数: {self.max_workers}")
+        logger.info(
+            "开始层级化知识构建流程，共有 %s 个文本块待处理，并行线程数: %s",
+            len(chunks),
+            self.max_workers,
+        )
 
         # 执行状态化的层级提炼
         phase_start = time.time()
-        print("[INFO] 执行状态化的层级提炼...")
+        logger.info("执行状态化的层级提炼...")
         enriched_chunks = self._distill_hierarchically(chunks)
         phase_time = time.time() - phase_start
-        print(
-            f"[INFO] 层级提炼完成，共生成 {len(enriched_chunks)} 个富集块，耗时 {phase_time:.2f} 秒")
+        logger.info(
+            "层级提炼完成，共生成 %s 个富集块，耗时 %.2f 秒",
+            len(enriched_chunks),
+            phase_time,
+        )
 
         # 生成扁平化的QA对列表，每个QA对包含问题、答案和分类信息
         flat_qa_pairs = []
@@ -421,10 +459,10 @@ class HierarchicalKnowledgeBuilder:
                         "answer": qa_pair["answer"],
                         "category": category
                     })
-        print(f"[INFO] 共生成 {len(flat_qa_pairs)} 个QA对")
+        logger.info("共生成 %s 个QA对", len(flat_qa_pairs))
 
         total_time = time.time() - total_start_time
-        print(f"[INFO] 知识构建流程完成，总耗时 {total_time:.2f} 秒")
+        logger.info("知识构建流程完成，总耗时 %.2f 秒", total_time)
 
         return flat_qa_pairs
 

@@ -4,6 +4,7 @@ import base64
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List
+import logging
 import mimetypes
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -11,6 +12,9 @@ from langchain_openai import ChatOpenAI
 
 from ..shared.config import get_vlm_config
 from ..shared.prompts import PromptManager
+
+
+logger = logging.getLogger(__name__)
 
 
 def _guess_mime_type(path: Path) -> str:
@@ -67,7 +71,7 @@ class OpenAIVLMClient(VLMClient):
             result = self._client.invoke(messages)
             return getattr(result, "content", "") or ""
         except Exception as e:
-            print(f"Error during VLM invocation: {e}")
+            logger.error("Error during VLM invocation: %s", e)
             return "[VLM 调用失败]"
 
     def describe(self, image_path: Path, prompt_name: str = "default_image_description") -> str:

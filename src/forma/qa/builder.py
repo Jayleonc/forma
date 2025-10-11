@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 import json
+import logging
 
 from langchain.output_parsers import PydanticOutputParser, OutputFixingParser
 from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
@@ -21,6 +22,9 @@ from ..shared.models import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 class KnowledgeBuilder:
     """封装多阶段的知识构建工作流。"""
 
@@ -30,7 +34,7 @@ class KnowledgeBuilder:
         client: ChatOpenAI | None = None,
     ) -> None:
         cfg = get_llm_config()
-        print(cfg)
+        logger.debug("LLM配置: %s", cfg)
         self.client = client or ChatOpenAI(
             model=cfg.model, api_key=cfg.api_key, base_url=cfg.base_url
         )
@@ -75,7 +79,7 @@ class KnowledgeBuilder:
                 summary="", qa_pairs=[], hypothetical_questions=[], entities={}
             )
         except Exception as e:
-            print(f"知识提炼步骤出错 (chunk: {chunk.chunk_id}): {e}")
+            logger.error("知识提炼步骤出错 (chunk: %s): %s", chunk.chunk_id, e)
             knowledge = DistilledKnowledge(
                 summary="", qa_pairs=[], hypothetical_questions=[], entities={}
             )
@@ -117,7 +121,7 @@ class KnowledgeBuilder:
         try:
             batch_results = chain.batch(batch_inputs)
         except Exception as e:
-            print(f"知识批量提炼步骤出错: {e}")
+            logger.error("知识批量提炼步骤出错: %s", e)
             batch_results = [None] * len(chunks)
 
         # 解析结果，保证健壮性
@@ -126,7 +130,9 @@ class KnowledgeBuilder:
             if isinstance(res, DistilledKnowledge):
                 knowledge = res
             else:
-                print(f"chunk {ch.chunk_id} 提炼失败，将使用空知识占位。")
+                logger.warning(
+                    "chunk %s 提炼失败，将使用空知识占位。", ch.chunk_id
+                )
                 knowledge = DistilledKnowledge(
                     summary="",
                     qa_pairs=[],
@@ -179,7 +185,7 @@ class KnowledgeBuilder:
             if isinstance(response, AuthoritativeKnowledgeList):
                 return response.root
         except Exception as e:
-            print(f"全局知识合成步骤出错: {e}")
+            logger.error("全局知识合成步骤出错: %s", e)
         return []
 
 

@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import List
+import logging
 import tempfile
 
 from .client import OpenAIVLMClient, VLMClient
 from ..shared.prompts import PromptManager
+
+
+logger = logging.getLogger(__name__)
 
 
 class VlmParser:
@@ -34,7 +38,12 @@ class VlmParser:
                     
                     # 检查图像尺寸，忽略太小的图像
                     if pix.width < 30 or pix.height < 30:  # 设置一个安全的最小尺寸
-                        print(f"[INFO] Page {i} is too small: {pix.width}x{pix.height}, skipping")
+                        logger.info(
+                            "Page %s is too small: %sx%s, skipping",
+                            i,
+                            pix.width,
+                            pix.height,
+                        )
                         continue
                         
                     img_path = tmp / f"page_{i}.png"
@@ -54,14 +63,16 @@ class VlmParser:
                 with Image.open(path) as img:
                     width, height = img.size
                     if width < 30 or height < 30:
-                        print(f"[INFO] Image is too small: {width}x{height}, skipping")
+                        logger.info(
+                            "Image is too small: %sx%s, skipping", width, height
+                        )
                         return ""
             except ImportError:
                 # 如果没有安装 PIL，跳过检查
-                print("[WARNING] PIL not installed, skipping image size check")
+                logger.warning("PIL not installed, skipping image size check")
             except Exception as e:
                 # 如果检查失败，记录警告但继续处理
-                print(f"[WARNING] Failed to check image size: {e}")
+                logger.warning("Failed to check image size: %s", e)
                 
             return self.client.invoke([path], prompt)
 
