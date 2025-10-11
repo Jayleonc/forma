@@ -86,6 +86,28 @@ class PdfProcessor(Processor):
         
         return _recognize(image_path)
     
+    def _fallback_extract_markdown(self, path: Path) -> str:
+        """当 pymupdf4llm 失败时的备用提取方法，逐页使用 PyMuPDF 提取文本"""
+        doc = fitz.open(str(path))
+        parts: List[str] = []
+        try:
+            for i, page in enumerate(doc):
+                parts.append(f"# Page {i+1}\n\n")
+                try:
+                    # 先尝试提取 markdown 格式
+                    md = page.get_text("markdown")
+                    if not md or not md.strip():
+                        # 如果 markdown 为空，回退到纯文本
+                        md = page.get_text("text")
+                except Exception:
+                    # 如果 markdown 提取失败，使用纯文本
+                    md = page.get_text("text")
+                parts.append((md or "").strip())
+                parts.append("\n")
+        finally:
+            doc.close()
+        return "\n".join(parts)
+    
     def process(self, input_path: Path) -> ProcessingResult:
         """处理PDF文件，返回处理结果"""
         process_start_time = time.time()
@@ -102,7 +124,14 @@ class PdfProcessor(Processor):
         except Exception as e:
             print(
                 f"[ERROR] PdfProcessor: Failed to convert PDF to markdown: {e.__class__.__name__}: {e}")
-            raise
+            # 处理特定的 PyMuPDF textpage 错误
+            if "not a textpage of this page" in str(e).lower():
+                print("[WARNING] PdfProcessor: Encountered 'not a textpage of this page' error, using fallback extraction")
+                base_md = self._fallback_extract_markdown(path)
+                text_len = len(base_md.strip())
+                print(f"[DEBUG] PdfProcessor: Fallback markdown extracted, length: {text_len} characters")
+            else:
+                raise
 
         try:
             print(f"[DEBUG] PdfProcessor: Opening PDF with fitz (PyMuPDF)")

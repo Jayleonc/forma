@@ -249,7 +249,7 @@ async def process_qa_task(task: GenerateQATask, client: httpx.AsyncClient) -> No
 
                 # 运行知识库生成流水线 - 使用 asyncio.to_thread 避免阻塞事件循环
                 # 并使用 asyncio.wait_for 实现超时控制
-                timeout_seconds = 300.0  # 5分钟超时
+                timeout_seconds = 600.0  # 10分钟超时
                 try:
                     await asyncio.wait_for(
                         asyncio.to_thread(
@@ -407,7 +407,7 @@ async def process_conversion_task(task: ConversionTask, client: httpx.AsyncClien
                     f"[DEBUG] About to start conversion process for file: {input_path}")
 
                 # 使用 asyncio.wait_for 实现超时控制
-                timeout_seconds = 300.0  # 5分钟超时
+                timeout_seconds = 600.0  # 10分钟超时
                 try:
                     await asyncio.wait_for(
                         asyncio.to_thread(
