@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import tempfile
 import time
 import uuid
@@ -21,11 +22,40 @@ import contextlib
 from .conversion.workflow import run_conversion
 from .shared.custom_types import Strategy
 
+# ============================================================================
+# Logging Configuration
+# ============================================================================
+# Configure logging before any logger is created
+# This ensures all module loggers inherit the correct level and format
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    stream=sys.stdout,
+)
+
+# Set root logger level explicitly to ensure propagation
+logging.getLogger().setLevel(LOG_LEVEL)
 
 logger = logging.getLogger(__name__)
+logger.info("Logging initialized with level: %s", LOG_LEVEL)
+
+# ============================================================================
+# Configuration
+# ============================================================================
 CONVERSION_TIMEOUT = float(os.getenv("FORMA_CONVERSION_TIMEOUT", "600"))
 QA_TIMEOUT = float(os.getenv("FORMA_QA_TIMEOUT", "600"))
 DATA_DIR = Path(os.getenv("FORMA_DATA_DIR", "./data"))
+CONVERSION_WORKERS = int(os.getenv("CONVERSION_WORKERS", "4"))
+QA_WORKERS = int(os.getenv("QA_WORKERS", "2"))
+
+logger.info("Configuration loaded:")
+logger.info("  - CONVERSION_TIMEOUT: %s seconds", CONVERSION_TIMEOUT)
+logger.info("  - QA_TIMEOUT: %s seconds", QA_TIMEOUT)
+logger.info("  - DATA_DIR: %s", DATA_DIR)
+logger.info("  - CONVERSION_WORKERS: %s", CONVERSION_WORKERS)
+logger.info("  - QA_WORKERS: %s", QA_WORKERS)
 
 class ConvertRequest(BaseModel):
     # Canonicalize to request_id as external and internal name
@@ -113,32 +143,33 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.on_event("startup")
 async def start_worker() -> None:
-    logger.debug("Starting workers...")
+    logger.info("Starting workers...")
     try:
         # 启动多个 conversion worker
-        num_conversion_workers = int(os.environ.get("CONVERSION_WORKERS", 4))
-        logger.debug("Creating %s conversion workers", num_conversion_workers)
+        logger.info("Creating %s conversion workers", CONVERSION_WORKERS)
         app.state.conversion_workers = [
             asyncio.create_task(conversion_worker(worker_id=i))
-            for i in range(num_conversion_workers)
+            for i in range(CONVERSION_WORKERS)
         ]
-        logger.info("Started %s conversion workers.", num_conversion_workers)
+        logger.info("✓ Started %s conversion workers.", CONVERSION_WORKERS)
 
         # 启动多个 QA worker
-        num_qa_workers = int(os.environ.get("QA_WORKERS", 2))
-        logger.debug("Creating %s QA workers", num_qa_workers)
+        logger.info("Creating %s QA workers", QA_WORKERS)
         app.state.qa_workers = [
             asyncio.create_task(qa_worker(worker_id=i))
-            for i in range(num_qa_workers)
+            for i in range(QA_WORKERS)
         ]
-        logger.info("Started %s QA workers.", num_qa_workers)
+        logger.info("✓ Started %s QA workers.", QA_WORKERS)
+        logger.info("=" * 60)
+        logger.info("Forma API Server is ready to accept requests.")
+        logger.info("=" * 60)
     except Exception:
         logger.exception("Error starting workers")
 
 
 @app.on_event("shutdown")
 async def stop_worker() -> None:
-    logger.debug("Shutting down workers...")
+    logger.info("Shutting down workers...")
     try:
         # 取消所有 worker 任务
         logger.debug("Cancelling conversion workers...")

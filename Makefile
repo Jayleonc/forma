@@ -1,5 +1,8 @@
 # Python/uv 项目通用 Makefile（以 uv 为主）
 # 目标：每次先 lock，再严格按锁文件安装；支持本地 wheel 仓库避免二次下载
+# 使用 'make help' 查看所有可用命令
+
+.DEFAULT_GOAL := help
 
 # 可按需修改
 PY_VER ?= 3.12.0
@@ -158,3 +161,95 @@ docker-stop:
 .PHONY: docker-logs
 docker-logs:
 	@docker logs -f $(CONTAINER_NAME)
+
+# ---------------- 本地服务运行 ----------------
+# 服务配置（可通过环境变量覆盖）
+HOST ?= 0.0.0.0
+SERVER_PORT ?= 8090
+WORKERS ?= 1
+CONVERSION_WORKERS ?= 4
+QA_WORKERS ?= 2
+LOG_LEVEL ?= INFO
+
+.PHONY: serve
+serve:
+	@echo "========================================"
+	@echo "  启动 Forma API 服务"
+	@echo "========================================"
+	@echo "配置:"
+	@echo "  - 监听地址: $(HOST):$(SERVER_PORT)"
+	@echo "  - Uvicorn Workers: $(WORKERS)"
+	@echo "  - Conversion Workers: $(CONVERSION_WORKERS)"
+	@echo "  - QA Workers: $(QA_WORKERS)"
+	@echo "  - 日志级别: $(LOG_LEVEL)"
+	@echo "========================================"
+	@echo ""
+	@CONVERSION_WORKERS=$(CONVERSION_WORKERS) \
+	QA_WORKERS=$(QA_WORKERS) \
+	LOG_LEVEL=$(LOG_LEVEL) \
+	uv run uvicorn forma.server:app \
+		--host $(HOST) \
+		--port $(SERVER_PORT) \
+		--workers $(WORKERS)
+
+.PHONY: serve-dev
+serve-dev:
+	@echo "========================================"
+	@echo "  启动 Forma API 服务 (开发模式)"
+	@echo "========================================"
+	@echo "配置:"
+	@echo "  - 监听地址: $(HOST):$(SERVER_PORT)"
+	@echo "  - 热重载: 已启用"
+	@echo "  - Conversion Workers: $(CONVERSION_WORKERS)"
+	@echo "  - QA Workers: $(QA_WORKERS)"
+	@echo "  - 日志级别: DEBUG"
+	@echo "========================================"
+	@echo ""
+	@CONVERSION_WORKERS=$(CONVERSION_WORKERS) \
+	QA_WORKERS=$(QA_WORKERS) \
+	LOG_LEVEL=DEBUG \
+	uv run uvicorn forma.server:app \
+		--host $(HOST) \
+		--port $(SERVER_PORT) \
+		--reload
+
+.PHONY: help
+help:
+	@echo "========================================"
+	@echo "  Forma 项目 Makefile 帮助"
+	@echo "========================================"
+	@echo ""
+	@echo "📦 依赖管理:"
+	@echo "  make deps          - 一键安装所有依赖（推荐首次使用）"
+	@echo "  make venv          - 创建虚拟环境"
+	@echo "  make lock          - 锁定依赖版本"
+	@echo "  make sync          - 同步安装依赖"
+	@echo "  make add pkg=XXX   - 添加新依赖"
+	@echo "  make remove pkg=XXX- 移除依赖"
+	@echo ""
+	@echo "🚀 服务运行:"
+	@echo "  make serve         - 启动 API 服务（生产模式）"
+	@echo "  make serve-dev     - 启动 API 服务（开发模式，热重载+DEBUG日志）"
+	@echo ""
+	@echo "  环境变量配置示例:"
+	@echo "    make serve HOST=0.0.0.0 SERVER_PORT=8090 CONVERSION_WORKERS=8 QA_WORKERS=4 LOG_LEVEL=INFO"
+	@echo ""
+	@echo "🧪 开发工具:"
+	@echo "  make test          - 运行测试"
+	@echo "  make lint          - 代码检查"
+	@echo "  make format        - 代码格式化"
+	@echo "  make quality       - 运行 lint + test"
+	@echo ""
+	@echo "🐳 Docker 部署:"
+	@echo "  make docker-build  - 构建 Docker 镜像"
+	@echo "  make docker-run    - 运行 Docker 容器"
+	@echo "  make docker-stop   - 停止 Docker 容器"
+	@echo "  make docker-logs   - 查看容器日志"
+	@echo ""
+	@echo "🛠️  维护:"
+	@echo "  make doctor        - 诊断环境信息"
+	@echo "  make clean         - 清理临时文件和缓存"
+	@echo "  make export        - 导出依赖清单"
+	@echo "  make wheels        - 预下载 wheel 包"
+	@echo ""
+	@echo "========================================"

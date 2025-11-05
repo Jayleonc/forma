@@ -31,7 +31,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local /usr/local
-COPY . .
+COPY prompts.yaml ./
+COPY src ./src
 
 EXPOSE 8090
 

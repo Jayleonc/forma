@@ -1,11 +1,9 @@
 [project]
 name = "forma"
 version = "0.1.0"
-description = "Python project bootstrapped by pyenv + uv"
+description = "双引擎智能文档转换微服务"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-license = { text = "MIT" }
-authors = [{ name = "Jayleonc", email = "jayleonc@gmail.com" }]
 dependencies = [
   "typer",
   "paddleocr",

@@ -2,11 +2,12 @@
 
 一个双引擎、智能的文档转换工具集。
 
-`forma` 旨在将不同格式的文档（如 PDF、DOCX、图片）高效地转换为结构化的 Markdown 格式。它内置了“快速”和“深度”双引擎，并提供“自动”策略，能够智能判断文档类型并选择最优处理方式。
+`forma` 旨在将不同格式的文档（如 PDF、DOCX、图片）高效地转换为结构化的 Markdown 格式。它内置了"快速"和"深度"双引擎，并提供"自动"策略，能够智能判断文档类型并选择最优处理方式。
 
 ## ✨ 核心功能
 
-- **统一的命令行接口**: 所有操作都通过 `forma convert` 和 `forma generate-qa` 命令完成，清晰易用。
+- **统一的命令行接口**: 所有操作都通过 `forma convert` 和 `forma qa` 命令完成，清晰易用。
+- **异步 API 服务**: 提供 RESTful API，支持文档转换和知识库生成，采用异步回调机制处理长时任务。
 - **多种处理策略**:
   - `fast`: 使用本地解析和 OCR，速度快，适用于文本型文档。
   - `deep`: 调用强大的视觉语言模型（VLM），由可定制的提示词驱动，精准处理扫描件、复杂排版和图片内容。
@@ -14,7 +15,20 @@
 - **广泛的格式支持**: 支持 PDF、DOCX、PPTX、PNG、JPG 等常见文档和图片格式。
 - **高度可扩展**: 采用按功能划分的模块化包结构，方便未来添加新的文件格式支持和功能。
 - **提示词工程**: 将提示词与代码分离到 `prompts.yaml`，方便用户按需定制。
-- **异步微服务**: 提供 `/api/v1/convert` 接口，接受包含 `request_id`、`source_url` 和 `callback_url` 的 JSON 请求，立即返回 `task_id`，转换完成后以回调方式返回结果。
+
+## 📋 目录
+
+- [快速上手](#-快速上手)
+  - [安装](#1-安装)
+  - [配置](#2-配置-api-密钥)
+  - [CLI 使用](#3-cli-使用)
+  - [API 服务](#4-api-服务)
+- [架构概览](#-架构概览)
+- [工作原理](#-工作原理)
+- [提示词工程](#-提示词工程-prompt-engineering)
+- [QA 生成](#-特性亮点-知识库生成)
+- [开发与测试](#-开发与测试)
+- [Docker 部署](#-docker-部署)
 
 ## 🚀 快速上手
 
@@ -75,7 +89,9 @@ FORMA_OPENAI_API_KEY="sk-your-api-key-here"
 # VLM_API_KEY="sk-your-api-key-here"
 ```
 
-### 3. 使用
+### 3. CLI 使用
+
+#### 文档转换
 
 使用 `convert` 命令进行文档转换。
 
@@ -100,6 +116,190 @@ uv run forma convert "./data/image/1.png" -o "./output" -s deep -p "technical_di
 - `-s, --strategy`: 转换策略，可选值为 `auto`, `fast`, `deep` (默认为 `auto`)。
 - `-p, --prompt`: 指定 `deep` 或 `auto` 策略要使用的提示词名称 (默认为 `default_image_description`)。
 - `--recursive / --no-recursive`: 是否递归处理子目录 (默认为 `True`)。
+
+#### 知识库生成
+
+使用 `qa-v2` 命令从 Markdown 生成结构化的知识库：
+
+```bash
+# 从 Markdown 生成知识库
+uv run forma qa-v2 "./output/document.md" -o "./knowledge" --export-csv
+```
+
+### 4. API 服务
+
+`forma` 提供了基于 FastAPI 的异步 API 服务，支持文档转换和知识库生成。
+
+#### 启动服务
+
+**生产模式：**
+
+```bash
+make serve
+```
+
+**开发模式（热重载 + DEBUG 日志）：**
+
+```bash
+make serve-dev
+```
+
+**自定义配置：**
+
+```bash
+# 通过环境变量配置
+make serve HOST=0.0.0.0 SERVER_PORT=8090 CONVERSION_WORKERS=8 QA_WORKERS=4 LOG_LEVEL=INFO
+```
+
+**环境变量说明：**
+
+| 变量名 | 默认值 | 说明 |
+|--------|--------|------|
+| `HOST` | `0.0.0.0` | 服务监听地址 |
+| `SERVER_PORT` | `8090` | 服务端口 |
+| `WORKERS` | `1` | Uvicorn 进程数（生产环境可设为 CPU 核心数） |
+| `CONVERSION_WORKERS` | `4` | 文档转换并发 worker 数量 |
+| `QA_WORKERS` | `2` | 知识库生成并发 worker 数量 |
+| `LOG_LEVEL` | `INFO` | 日志级别（DEBUG/INFO/WARNING/ERROR） |
+| `FORMA_CONVERSION_TIMEOUT` | `600` | 文档转换超时时间（秒） |
+| `FORMA_QA_TIMEOUT` | `600` | 知识库生成超时时间（秒） |
+| `FORMA_DATA_DIR` | `./data` | 数据保存目录 |
+
+#### API 端点
+
+##### 1. 文档转换 API
+
+**端点：** `POST /api/v1/convert`
+
+**请求示例：**
+
+```json
+{
+  "request_id": "unique-request-id-123",
+  "source_url": "https://example.com/document.pdf",
+  "callback_url": "https://your-service.com/callback"
+}
+```
+
+**立即响应：**
+
+```json
+{
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "processing"
+}
+```
+
+**回调通知（转换完成后）：**
+
+成功时：
+```json
+{
+  "request_id": "unique-request-id-123",
+  "status": "completed",
+  "markdown_content": "# 文档标题\n\n文档内容...",
+  "error_message": null
+}
+```
+
+失败时：
+```json
+{
+  "request_id": "unique-request-id-123",
+  "status": "failed",
+  "markdown_content": null,
+  "error_message": "File: document.pdf - RuntimeError: 转换失败原因..."
+}
+```
+
+##### 2. 知识库生成 API
+
+**端点：** `POST /api/v1/generate-qa`
+
+**请求示例：**
+
+```json
+{
+  "request_id": "unique-request-id-456",
+  "markdown_content": "# 文档标题\n\n## 章节1\n\n内容...",
+  "callback_url": "https://your-service.com/qa-callback"
+}
+```
+
+**立即响应：**
+
+```json
+{
+  "task_id": "660e8400-e29b-41d4-a716-446655440001",
+  "status": "processing"
+}
+```
+
+**回调通知（生成完成后）：**
+
+成功时：
+```json
+{
+  "request_id": "unique-request-id-456",
+  "status": "completed",
+  "faq_json": "{\"qa_pairs\":[{\"question\":\"...\",\"answer\":\"...\",\"category\":\"...\"}, ...]}",
+  "error_message": null
+}
+```
+
+失败时：
+```json
+{
+  "request_id": "unique-request-id-456",
+  "status": "failed",
+  "faq_json": null,
+  "error_message": "FAQ Generation Error - RuntimeError: 生成失败原因..."
+}
+```
+
+#### 使用 curl 测试
+
+```bash
+# 测试文档转换
+curl -X POST "http://localhost:8090/api/v1/convert" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request_id": "test-123",
+    "source_url": "https://example.com/sample.pdf",
+    "callback_url": "https://webhook.site/your-unique-url"
+  }'
+
+# 测试知识库生成
+curl -X POST "http://localhost:8090/api/v1/generate-qa" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request_id": "qa-test-456",
+    "markdown_content": "# 测试文档\n\n## 章节1\n\n这是测试内容。",
+    "callback_url": "https://webhook.site/your-unique-url"
+  }'
+```
+
+#### 日志查看
+
+服务启动后会输出详细的日志信息：
+
+```
+2025-10-11 14:20:00 [INFO] [forma.server] Logging initialized with level: INFO
+2025-10-11 14:20:00 [INFO] [forma.server] Configuration loaded:
+2025-10-11 14:20:00 [INFO] [forma.server]   - CONVERSION_TIMEOUT: 600.0 seconds
+2025-10-11 14:20:00 [INFO] [forma.server]   - QA_TIMEOUT: 600.0 seconds
+2025-10-11 14:20:00 [INFO] [forma.server]   - DATA_DIR: ./data
+2025-10-11 14:20:00 [INFO] [forma.server]   - CONVERSION_WORKERS: 4
+2025-10-11 14:20:00 [INFO] [forma.server]   - QA_WORKERS: 2
+2025-10-11 14:20:00 [INFO] [forma.server] Starting workers...
+2025-10-11 14:20:00 [INFO] [forma.server] ✓ Started 4 conversion workers.
+2025-10-11 14:20:00 [INFO] [forma.server] ✓ Started 2 QA workers.
+2025-10-11 14:20:00 [INFO] [forma.server] ============================================================
+2025-10-11 14:20:00 [INFO] [forma.server] Forma API Server is ready to accept requests.
+2025-10-11 14:20:00 [INFO] [forma.server] ============================================================
+```
+
+若需要查看详细的调试日志，使用 `make serve-dev` 或设置 `LOG_LEVEL=DEBUG`。
 
 ## 🛠️ 架构概览
 
@@ -201,15 +401,42 @@ prompts:
 
 ## 🧑‍💻 开发与测试
 
+### 常用命令
+
+查看所有可用命令：
+
+```bash
+make help
+```
+
+### 测试
+
 项目使用 `pytest` 进行测试。运行以下命令以执行完整的测试套件：
 
 ```bash
 make test
 ```
 
-这会运行 `tests/` 目录下的所有测试用例，并生成覆盖率报告。
+### 代码质量
 
-## ✨ 特性亮点: `generate-qa` 命令
+```bash
+# 代码检查
+make lint
+
+# 代码格式化
+make format
+
+# 运行 lint + test
+make quality
+```
+
+### 环境诊断
+
+```bash
+make doctor
+```
+
+## ✨ 特性亮点: 知识库生成
 
 `forma` 提供了一个强大的 `generate-qa` 命令，可以将任何 Markdown 文档转换为结构化的、高质量的常见问题（FAQ）列表，并以 CSV 格式导出。这背后是一套精心设计的三阶段智能流水线。
 
@@ -323,3 +550,86 @@ question,answer,category
 
 > 提示：如果你的文档层级较深，`category` 会完整保留其层级链，便于下游检索与筛选。
 
+## 🐳 Docker 部署
+
+项目提供了 Docker 支持，方便容器化部署。
+
+### 构建镜像
+
+```bash
+make docker-build
+```
+
+### 运行容器
+
+```bash
+make docker-run
+```
+
+### 查看日志
+
+```bash
+make docker-logs
+```
+
+### 停止容器
+
+```bash
+make docker-stop
+```
+
+## 📝 常见问题
+
+### 1. 如何调整 worker 数量？
+
+通过环境变量配置：
+
+```bash
+make serve CONVERSION_WORKERS=8 QA_WORKERS=4
+```
+
+或在 `.env` 文件中设置：
+
+```env
+CONVERSION_WORKERS=8
+QA_WORKERS=4
+```
+
+### 2. 如何查看详细日志？
+
+使用开发模式或设置日志级别：
+
+```bash
+# 方式1：开发模式（自动 DEBUG）
+make serve-dev
+
+# 方式2：手动设置
+make serve LOG_LEVEL=DEBUG
+```
+
+### 3. 如何修改超时时间？
+
+在 `.env` 文件中设置：
+
+```env
+FORMA_CONVERSION_TIMEOUT=1200  # 20分钟
+FORMA_QA_TIMEOUT=1200
+```
+
+### 4. API 回调失败怎么办？
+
+- 检查 `callback_url` 是否可访问
+- 查看服务日志中的错误信息（`LOG_LEVEL=DEBUG`）
+- 确保回调接口能接收 POST 请求并返回 2xx 状态码
+
+### 5. 为什么没有日志输出？
+
+确保设置了正确的日志级别：
+
+```bash
+# 启动时设置
+make serve LOG_LEVEL=DEBUG
+
+# 或在 .env 文件中
+LOG_LEVEL=DEBUG
+```
