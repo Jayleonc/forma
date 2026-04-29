@@ -238,6 +238,7 @@ class PdfProcessor(Processor):
                         max_workers,
                     )
 
+                    # 线程池的某个线程里开启多个子线程，并行处理OCR预处理
                     with ThreadPoolExecutor(max_workers=max_workers) as executor:
                         futures = [
                             executor.submit(ocr_image_file, str(info["path"]))

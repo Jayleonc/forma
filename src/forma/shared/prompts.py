@@ -44,7 +44,7 @@ class PromptManager:
         "default_image_description": set(),  # 无变量
         "docx_image_description": set(),     # 无变量
         "pdf_image_description": set(),      # 无变量
-        
+
         # 知识提取相关提示词
         "knowledge_distillation_prompt": {"chunk_text", "format_instructions"},
         "global_knowledge_synthesis_prompt": {"enriched_chunks", "format_instructions"},
@@ -105,27 +105,62 @@ class PromptManager:
                         template.get("user", ""), allowed_vars
                     ),
                 }
-            
+
+            # 检查是否有关键提示词缺失，如果缺失则注入一个安全的内置兜底，
+            # 以避免在运行时因为 YAML 缺失或解析失败导致 KeyError。
+            key_prompt_fallbacks: Dict[str, Dict[str, str]] = {
+                "default_image_description": {
+                    "system": (
+                        "你是一位顶级的速记员和信息整理专家。"
+                        "你的任务是将图片中的所有文字内容转录为结构清晰的 Markdown 文本。"
+                    ),
+                    "user": (
+                        "请只提取图片中的文字内容，并使用标题、列表等 Markdown 结构进行组织。"
+                        "不要描述颜色、位置、图标等视觉外观，只关心文字本身和其逻辑结构。"
+                    ),
+                },
+                "docx_image_description": {
+                    "system": "你是一位信息提取专家，负责简要概括图片的核心内容。",
+                    "user": (
+                        "请用一两句简洁的话总结这张图片传达的核心信息，"
+                        "不要使用 Markdown 格式，也不要描述颜色、布局等外观。"
+                    ),
+                },
+                "pdf_image_description": {
+                    "system": "你是一位图像内容提取专家，负责从图片中提取有价值的文字内容。",
+                    "user": (
+                        "如果图片只包含装饰性元素或无意义内容，请返回空字符串；"
+                        "否则请直接提取文字内容，保持原始结构，不要添加额外说明。"
+                    ),
+                },
+            }
+
+            for name, fallback in key_prompt_fallbacks.items():
+                if name not in self._prompts:
+                    logger.warning(
+                        "Key prompt '%s' missing from prompts.yaml, injecting built-in fallback.",
+                        name,
+                    )
+                    allowed_vars = self._ALLOWED_VARS_MAP.get(name, set())
+                    self._prompts[name] = {
+                        "system": self._sanitize_template(
+                            fallback.get("system", ""), set()
+                        ),
+                        "user": self._sanitize_template(
+                            fallback.get("user", ""), allowed_vars
+                        ),
+                    }
+
             # 打印已加载的提示词列表
             logger.debug(
                 "Successfully loaded %s prompts: %s",
                 len(self._prompts),
                 ", ".join(self._prompts.keys()),
             )
-            
-            # 检查是否有关键提示词缺失
-            key_prompts = ["default_image_description", "pdf_image_description", "docx_image_description"]
-            missing_prompts = [p for p in key_prompts if p not in self._prompts]
-            if missing_prompts:
-                logger.warning(
-                    "Some key prompts are missing: %s",
-                    ", ".join(missing_prompts),
-                )
-            else:
-                logger.debug("All key prompts are loaded successfully.")
         except FileNotFoundError:
             # 文件不存在时，保持 _prompts 为空字典
-            logger.warning("prompts.yaml file not found at %s", root / "prompts.yaml")
+            logger.warning("prompts.yaml file not found at %s",
+                           root / "prompts.yaml")
             # self._prompts 已在 __new__ 中初始化为空字典
         except (yaml.YAMLError, ValueError) as e:
             # 处理 YAML 格式错误或结构不正确的情况

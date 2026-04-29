@@ -6,10 +6,14 @@ import asyncio
 import json
 import logging
 import os
+import queue as _queue_module
 import sys
 import tempfile
+import threading
 import time
 import uuid
+from functools import partial
+from multiprocessing import Process, Queue as MPQueue
 from pathlib import Path
 
 import httpx
@@ -19,7 +23,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, AnyHttpUrl, ConfigDict
 import contextlib
 
-from .conversion.workflow import run_conversion
+from .conversion.workflow import run_conversion, run_fallback, VLM_SUPPORTED_SUFFIXES
 from .shared.custom_types import Strategy
 
 # ============================================================================
@@ -46,6 +50,7 @@ logger.info("Logging initialized with level: %s", LOG_LEVEL)
 # ============================================================================
 CONVERSION_TIMEOUT = float(os.getenv("FORMA_CONVERSION_TIMEOUT", "600"))
 QA_TIMEOUT = float(os.getenv("FORMA_QA_TIMEOUT", "600"))
+FALLBACK_TIMEOUT = float(os.getenv("FORMA_FALLBACK_TIMEOUT", "300"))
 DATA_DIR = Path(os.getenv("FORMA_DATA_DIR", "./data"))
 CONVERSION_WORKERS = int(os.getenv("CONVERSION_WORKERS", "4"))
 QA_WORKERS = int(os.getenv("QA_WORKERS", "2"))
@@ -53,6 +58,7 @@ QA_WORKERS = int(os.getenv("QA_WORKERS", "2"))
 logger.info("Configuration loaded:")
 logger.info("  - CONVERSION_TIMEOUT: %s seconds", CONVERSION_TIMEOUT)
 logger.info("  - QA_TIMEOUT: %s seconds", QA_TIMEOUT)
+logger.info("  - FALLBACK_TIMEOUT: %s seconds", FALLBACK_TIMEOUT)
 logger.info("  - DATA_DIR: %s", DATA_DIR)
 logger.info("  - CONVERSION_WORKERS: %s", CONVERSION_WORKERS)
 logger.info("  - QA_WORKERS: %s", QA_WORKERS)
@@ -71,6 +77,7 @@ class ConvertResponse(BaseModel):
     status: str = "processing"
 
 
+# 定义回调 payload
 class CallbackPayload(BaseModel):
     # 使用下划线风格的字段名
     model_config = ConfigDict(populate_by_name=True)
@@ -81,11 +88,12 @@ class CallbackPayload(BaseModel):
     error_message: str | None = None
 
 
+# 定义一个任务类，用于存储任务信息
 class ConversionTask(BaseModel):
-    task_id: str
-    request_id: str
-    source_url: AnyHttpUrl
-    callback_url: AnyHttpUrl
+    task_id: str # 任务ID
+    request_id: str # 请求ID
+    source_url: AnyHttpUrl # 任务来源URL
+    callback_url: AnyHttpUrl # 任务回调URL
 
 
 # 新增 FAQ 生成相关模型
@@ -123,8 +131,143 @@ class GenerateQATask(BaseModel):
 
 
 app = FastAPI()
+# 定义两个队列，一个用于处理文档转换任务，一个用于处理 FAQ 生成任务
+# 全局对象
 conversion_queue: asyncio.Queue[ConversionTask] = asyncio.Queue()
-qa_queue: asyncio.Queue[GenerateQATask] = asyncio.Queue()  # 新增 FAQ 生成任务队列
+qa_queue: asyncio.Queue[GenerateQATask] = asyncio.Queue()
+
+
+# ============================================================================
+# 进程隔离工具 — 替代 asyncio.to_thread 解决线程泄漏问题
+# ============================================================================
+# 专用于等待子进程 IPC 结果的轻量线程池（仅做 Queue.get 阻塞等待，不执行 CPU 密集操作）
+import concurrent.futures as _cf
+_ipc_thread_pool = _cf.ThreadPoolExecutor(max_workers=8, thread_name_prefix="ipc-waiter")
+
+
+def _subprocess_entry(func, result_queue):
+    """子进程入口：执行 func 并将结果放入队列。"""
+    try:
+        result = func()
+        result_queue.put(("ok", result))
+    except Exception as e:
+        # 异常对象可能不可跨进程序列化，转为字符串保证安全
+        result_queue.put(("error", f"{e.__class__.__name__}: {e}"))
+
+
+def _poll_queue(q, stop_event, poll_interval=0.5):
+    """短轮询等待队列结果。stop_event 置位时快速退出，避免线程泄漏。"""
+    while not stop_event.is_set():
+        try:
+            return q.get(timeout=poll_interval)
+        except _queue_module.Empty:
+            continue
+    raise RuntimeError("poll stopped by stop_event")
+
+
+async def run_in_subprocess(func, *, timeout=None):
+    """在独立子进程中执行同步函数，超时后可通过 kill 彻底回收。
+
+    解决 asyncio.to_thread 的两大缺陷：
+    1. 共享默认线程池 → 独立子进程，完全隔离
+    2. 超时后线程不可取消 → 子进程 kill 连带回收所有资源（含嵌套线程）
+    """
+    result_queue = MPQueue()
+    stop_event = threading.Event()
+    process = Process(target=_subprocess_entry, args=(func, result_queue), daemon=True)
+    process.start()
+    logger.debug("子进程已启动 PID=%s", process.pid)
+
+    loop = asyncio.get_running_loop()
+
+    try:
+        status, payload = await asyncio.wait_for(
+            loop.run_in_executor(
+                _ipc_thread_pool,
+                partial(_poll_queue, result_queue, stop_event),
+            ),
+            timeout=timeout,
+        )
+
+        if status == "ok":
+            return payload
+        else:
+            raise RuntimeError(payload)
+    except asyncio.TimeoutError:
+        logger.warning("子进程 PID=%s 超时 (%.0fs)，正在 kill...", process.pid, timeout or 0)
+        stop_event.set()
+        process.kill()
+        process.join(timeout=5)
+        if process.is_alive():
+            logger.error("子进程 PID=%s kill 后仍存活！", process.pid)
+        raise
+    finally:
+        stop_event.set()  # 确保轮询线程退出
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=3)
+        try:
+            result_queue.close()
+            result_queue.join_thread()
+        except Exception:
+            pass
+
+
+# ============================================================================
+# 可观测性指标
+# ============================================================================
+class ConversionMetrics:
+    """转换任务可观测性指标（线程安全）。"""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.total_conversions = 0
+        self.total_qa = 0
+        self.total_fallbacks = 0
+        self.fallback_successes = 0
+        self.fallback_failures = 0
+        self.fallback_timeouts = 0
+        self.fallback_type_rejections = 0
+        self.total_fallback_duration_s = 0.0
+
+    def record_conversion(self):
+        with self._lock:
+            self.total_conversions += 1
+
+    def record_qa(self):
+        with self._lock:
+            self.total_qa += 1
+
+    def record_fallback(self, *, success: bool, duration: float,
+                        timed_out: bool = False, type_rejected: bool = False):
+        with self._lock:
+            self.total_fallbacks += 1
+            if type_rejected:
+                self.fallback_type_rejections += 1
+            elif timed_out:
+                self.fallback_timeouts += 1
+            elif success:
+                self.fallback_successes += 1
+            else:
+                self.fallback_failures += 1
+            self.total_fallback_duration_s += duration
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            fb = self.total_fallbacks
+            return {
+                "total_conversions": self.total_conversions,
+                "total_qa": self.total_qa,
+                "total_fallbacks": fb,
+                "fallback_successes": self.fallback_successes,
+                "fallback_failures": self.fallback_failures,
+                "fallback_timeouts": self.fallback_timeouts,
+                "fallback_type_rejections": self.fallback_type_rejections,
+                "avg_fallback_duration_s": round(
+                    self.total_fallback_duration_s / fb, 2
+                ) if fb > 0 else 0.0,
+            }
+
 
 
 @app.exception_handler(RequestValidationError)
@@ -141,24 +284,79 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": exc.errors()})
 
 
+def _on_worker_done(worker_type: str, worker_id: int, task: asyncio.Task) -> None:
+    """Worker 退出时的回调：记录日志，如果是异常退出则自动重启。"""
+    # 正常关闭流程中的取消，不需要重启
+    if task.cancelled():
+        logger.info("%s worker %s 已取消（正常关闭）。", worker_type, worker_id)
+        return
+
+    # 如果正在执行 shutdown，不要重启
+    if getattr(app.state, "shutting_down", False):
+        return
+
+    exc = task.exception()
+    if exc:
+        logger.error(
+            "CRITICAL: %s worker %s 意外崩溃: %s", worker_type, worker_id, exc)
+    else:
+        logger.warning(
+            "%s worker %s 意外退出（无异常）。", worker_type, worker_id)
+
+    # 自动重启
+    _restart_worker(worker_type, worker_id)
+
+
+def _restart_worker(worker_type: str, worker_id: int) -> None:
+    """重启一个崩溃的 Worker，并更新 app.state 中的强引用。"""
+    logger.info("正在重启 %s worker %s ...", worker_type, worker_id)
+
+    if worker_type == "conversion":
+        coro = conversion_worker(worker_id=worker_id)
+        workers_list = getattr(app.state, "conversion_workers", [])
+    elif worker_type == "qa":
+        coro = qa_worker(worker_id=worker_id)
+        workers_list = getattr(app.state, "qa_workers", [])
+    else:
+        logger.error("未知的 worker 类型: %s", worker_type)
+        return
+
+    new_task = asyncio.create_task(coro)
+    new_task.add_done_callback(
+        lambda t, wt=worker_type, wid=worker_id: _on_worker_done(wt, wid, t)
+    )
+    # 替换旧引用，保持 app.state 中的强引用
+    if worker_id < len(workers_list):
+        workers_list[worker_id] = new_task
+    logger.info("✓ %s worker %s 已重启。", worker_type, worker_id)
+
+
 @app.on_event("startup")
 async def start_worker() -> None:
     logger.info("Starting workers...")
+    app.state.shutting_down = False
+    app.state.metrics = ConversionMetrics()
     try:
         # 启动多个 conversion worker
         logger.info("Creating %s conversion workers", CONVERSION_WORKERS)
-        app.state.conversion_workers = [
-            asyncio.create_task(conversion_worker(worker_id=i))
-            for i in range(CONVERSION_WORKERS)
-        ]
+        app.state.conversion_workers = []
+        for i in range(CONVERSION_WORKERS):
+            task = asyncio.create_task(conversion_worker(worker_id=i))
+            task.add_done_callback(
+                lambda t, wid=i: _on_worker_done("conversion", wid, t)
+            )
+            app.state.conversion_workers.append(task)
         logger.info("✓ Started %s conversion workers.", CONVERSION_WORKERS)
 
         # 启动多个 QA worker
         logger.info("Creating %s QA workers", QA_WORKERS)
-        app.state.qa_workers = [
-            asyncio.create_task(qa_worker(worker_id=i))
-            for i in range(QA_WORKERS)
-        ]
+        app.state.qa_workers = []
+        for i in range(QA_WORKERS):
+            task = asyncio.create_task(qa_worker(worker_id=i))
+            task.add_done_callback(
+                lambda t, wid=i: _on_worker_done("qa", wid, t)
+            )
+            app.state.qa_workers.append(task)
         logger.info("✓ Started %s QA workers.", QA_WORKERS)
         logger.info("=" * 60)
         logger.info("Forma API Server is ready to accept requests.")
@@ -169,39 +367,38 @@ async def start_worker() -> None:
 
 @app.on_event("shutdown")
 async def stop_worker() -> None:
+    """优雅关闭所有 Worker：发送取消信号 → 等待退出 → 清理引用。"""
     logger.info("Shutting down workers...")
-    try:
-        # 取消所有 worker 任务
-        logger.debug("Cancelling conversion workers...")
-        if hasattr(app.state, 'conversion_workers'):
-            for worker in app.state.conversion_workers:
-                worker.cancel()
-        else:
-            logger.warning("No conversion_workers found in app.state")
+    # 设置标志位，防止 _on_worker_done 回调在关闭期间误重启 Worker
+    app.state.shutting_down = True
 
-        logger.debug("Cancelling QA workers...")
-        if hasattr(app.state, 'qa_workers'):
-            for worker in app.state.qa_workers:
-                worker.cancel()
-        else:
-            logger.warning("No qa_workers found in app.state")
+    all_workers: list[asyncio.Task] = []
+    if hasattr(app.state, "conversion_workers"):
+        all_workers.extend(app.state.conversion_workers)
+    if hasattr(app.state, "qa_workers"):
+        all_workers.extend(app.state.qa_workers)
 
-        # 等待所有 worker 任务完成取消
-        logger.debug("Waiting for conversion workers to complete cancellation...")
-        if hasattr(app.state, 'conversion_workers'):
-            for worker in app.state.conversion_workers:
-                with contextlib.suppress(asyncio.CancelledError):
-                    await worker
+    if not all_workers:
+        logger.warning("No workers found to shut down.")
+        return
 
-        logger.debug("Waiting for QA workers to complete cancellation...")
-        if hasattr(app.state, 'qa_workers'):
-            for worker in app.state.qa_workers:
-                with contextlib.suppress(asyncio.CancelledError):
-                    await worker
+    # 1. 发送取消信号
+    for worker in all_workers:
+        worker.cancel()
 
-        logger.info("All workers have been shut down.")
-    except Exception:
-        logger.exception("Error shutting down workers")
+    # 2. 并行等待所有 worker 处理完取消逻辑（如 finally 块）
+    results = await asyncio.gather(*all_workers, return_exceptions=True)
+    for i, result in enumerate(results):
+        if isinstance(result, asyncio.CancelledError):
+            continue
+        if isinstance(result, Exception):
+            logger.warning(
+                "Worker %s exited with error during shutdown: %s", i, result)
+
+    logger.info("All %s workers have been shut down.", len(all_workers))
+
+    # 关闭 IPC 线程池
+    _ipc_thread_pool.shutdown(wait=False)
 
 
 @app.post("/api/v1/convert", response_model=ConvertResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -224,36 +421,61 @@ async def generate_qa(request: GenerateQARequest) -> GenerateQAResponse:
     return GenerateQAResponse(task_id=task_id)
 
 
+# 异步工作进程，不停的从队列中获取任务并处理
 async def conversion_worker(worker_id: int) -> None:
-    """Background worker that processes document conversion tasks."""
+    """后台 Worker：循环从队列中取出文档转换任务并处理。"""
 
     async with httpx.AsyncClient(timeout=None) as client:
         while True:
-            task = await conversion_queue.get()
-            logger.debug(
-                "Conversion worker %s picked up task: %s", worker_id, task.task_id)
             try:
-                await process_conversion_task(task, client)
-            finally:
-                conversion_queue.task_done()
+                task = await conversion_queue.get()
+                logger.debug(
+                    "Conversion worker %s picked up task: %s", worker_id, task.task_id)
+                try:
+                    await process_conversion_task(task, client)
+                except Exception:
+                    logger.exception(
+                        "Conversion worker %s: 处理任务时发生未捕获异常", worker_id)
+                finally:
+                    conversion_queue.task_done()
+            except asyncio.CancelledError:
+                logger.info("Conversion worker %s 收到取消信号，正在退出。", worker_id)
+                raise
+            except Exception:
+                logger.exception(
+                    "CRITICAL: Conversion worker %s 循环异常，1 秒后重试...", worker_id)
+                await asyncio.sleep(1)
 
 
 async def qa_worker(worker_id: int) -> None:
-    """Background worker that processes FAQ generation tasks."""
+    """后台 Worker：循环从队列中取出 QA 生成任务并处理。"""
 
     async with httpx.AsyncClient(timeout=None) as client:
         while True:
-            task = await qa_queue.get()
-            logger.debug(
-                "QA worker %s picked up task: %s", worker_id, task.task_id)
             try:
-                await process_qa_task(task, client)
-            finally:
-                qa_queue.task_done()
+                task = await qa_queue.get()
+                logger.debug(
+                    "QA worker %s picked up task: %s", worker_id, task.task_id)
+                try:
+                    await process_qa_task(task, client)
+                except Exception:
+                    logger.exception(
+                        "QA worker %s: 处理任务时发生未捕获异常", worker_id)
+                finally:
+                    qa_queue.task_done()
+            except asyncio.CancelledError:
+                logger.info("QA worker %s 收到取消信号，正在退出。", worker_id)
+                raise
+            except Exception:
+                logger.exception(
+                    "CRITICAL: QA worker %s 循环异常，1 秒后重试...", worker_id)
+                await asyncio.sleep(1)
 
 
 async def process_qa_task(task: GenerateQATask, client: httpx.AsyncClient) -> None:
     """Process FAQ generation task and callback the result."""
+    app.state.metrics.record_qa()
+
 
     callback = QACallbackPayload(request_id=task.request_id, status="failed")
     try:
@@ -277,15 +499,13 @@ async def process_qa_task(task: GenerateQATask, client: httpx.AsyncClient) -> No
                 from forma.qa.pipeline_v2 import run_knowledge_pipeline
 
                 try:
-                    await asyncio.wait_for(
-                        asyncio.to_thread(
-                            run_knowledge_pipeline,
-                            input_path=input_path,
-                            output_dir=output_dir,
-                            export_csv=False,
-                        ),
-                        timeout=QA_TIMEOUT,
+                    qa_func = partial(
+                        run_knowledge_pipeline,
+                        input_path=input_path,
+                        output_dir=output_dir,
+                        export_csv=False,
                     )
+                    await run_in_subprocess(qa_func, timeout=QA_TIMEOUT)
                     logger.debug("FAQ generation completed successfully")
                 except asyncio.TimeoutError as exc:
                     logger.warning(
@@ -380,8 +600,10 @@ async def process_qa_task(task: GenerateQATask, client: httpx.AsyncClient) -> No
 
 
 async def process_conversion_task(task: ConversionTask, client: httpx.AsyncClient) -> None:
-    """Download, convert and callback the result."""
+    """下载、转换并处理回调。使用进程隔离执行，超时可 kill 回收。"""
+    app.state.metrics.record_conversion()
 
+    # 初始化回调 payload
     callback = CallbackPayload(request_id=task.request_id, status="failed")
     input_path: Path | None = None
     try:
@@ -395,6 +617,7 @@ async def process_conversion_task(task: ConversionTask, client: httpx.AsyncClien
         with tempfile.TemporaryDirectory() as temp_dir_str:
             temp_dir = Path(temp_dir_str)
 
+            # 解析文件名，从task.source_url里提取文件名，得到 decoded_filename
             url_path = Path(str(task.source_url))
             original_filename = url_path.name
 
@@ -434,59 +657,86 @@ async def process_conversion_task(task: ConversionTask, client: httpx.AsyncClien
                 )
 
                 try:
-                    await asyncio.wait_for(
-                        asyncio.to_thread(
-                            run_conversion,
-                            inputs=[input_path],
-                            output_dir=output_dir,
-                            strategy=Strategy.AUTO,
-                            recursive=False,
-                            use_ocr_for_images=False,
-                        ),
-                        timeout=CONVERSION_TIMEOUT,
+                    conversion_func = partial(
+                        run_conversion,
+                        inputs=[input_path],
+                        output_dir=output_dir,
+                        strategy=Strategy.AUTO,
+                        recursive=False,
+                        use_ocr_for_images=False,
                     )
+                    await run_in_subprocess(conversion_func, timeout=CONVERSION_TIMEOUT)
                     logger.debug("Conversion completed successfully")
 
+                # 主流程超时 → 尝试 fallback（进程隔离 + 独立超时）
                 except asyncio.TimeoutError:
                     logger.warning(
                         "Conversion timed out after %s seconds for %s",
                         CONVERSION_TIMEOUT,
                         input_path.name,
                     )
-                    logger.debug("Attempting fallback processing method")
+                    fallback_start = time.time()
+                    suffix = input_path.suffix.lower()
 
-                    from .conversion.workflow import process_fallback
-                    from .conversion.workflow import _select_processor
-                    from .vision import OpenAIVLMClient, VlmParser
-
-                    vlm_client = OpenAIVLMClient()
-                    vlm_parser = VlmParser(vlm_client)
-
-                    processor = _select_processor(input_path, vlm_client)
-                    if processor is None:
+                    # 修复项1：文件类型检查 - VlmParser 仅支持 PDF 和图片
+                    if suffix not in VLM_SUPPORTED_SUFFIXES:
+                        fb_dur = time.time() - fallback_start
+                        app.state.metrics.record_fallback(
+                            success=False, duration=fb_dur, type_rejected=True
+                        )
                         raise RuntimeError(
-                            f"No suitable processor found for {input_path}"
+                            f"转换超时，且文件类型 '{suffix}' 不支持 fallback 处理"
                         )
 
-                    logger.debug("Using fallback processing for %s", input_path)
-                    final_md, _ = await asyncio.to_thread(
-                        process_fallback,
-                        processor=processor,
-                        path=input_path,
-                        vlm_client=vlm_client,
-                        vlm_parser=vlm_parser,
-                        prompt_name="default_image_description",
-                    )
+                    try:
+                        logger.info(
+                            "Using fallback processing for %s (timeout=%ss)",
+                            input_path.name, FALLBACK_TIMEOUT,
+                        )
+                        fallback_func = partial(
+                            run_fallback,
+                            path=input_path,
+                            prompt_name="default_image_description",
+                        )
+                        # 修复项2+3+4：进程隔离 + 超时控制 + kill 连带回收
+                        final_md, text_char_count, low_confidence = (
+                            await run_in_subprocess(fallback_func, timeout=FALLBACK_TIMEOUT)
+                        )
 
-                    from .shared.utils.markdown_cleaner import MarkdownCleaner
+                        # 修复项5：fallback 结果也过 confidence 检查
+                        from .shared.config import get_vlm_config
+                        threshold = get_vlm_config().auto_threshold
+                        if low_confidence or text_char_count < threshold:
+                            logger.warning(
+                                "Fallback 结果置信度低 (chars=%s, threshold=%s)",
+                                text_char_count, threshold,
+                            )
 
-                    cleaned_md = MarkdownCleaner.clean_markdown(final_md)
-                    output_file = output_dir / f"{input_path.stem}.md"
-                    output_file.write_text(cleaned_md, encoding="utf-8")
-                    logger.debug(
-                        "Fallback processing completed and saved to %s",
-                        output_file,
-                    )
+                        from .shared.utils.markdown_cleaner import MarkdownCleaner
+                        cleaned_md = MarkdownCleaner.clean_markdown(final_md)
+                        output_file = output_dir / f"{input_path.stem}.md"
+                        output_file.write_text(cleaned_md, encoding="utf-8")
+
+                        fb_dur = time.time() - fallback_start
+                        app.state.metrics.record_fallback(success=True, duration=fb_dur)
+                        logger.info(
+                            "Fallback 成功: file=%s, 耗时=%.2fs, chars=%s",
+                            input_path.name, fb_dur, text_char_count,
+                        )
+
+                    except asyncio.TimeoutError:
+                        fb_dur = time.time() - fallback_start
+                        app.state.metrics.record_fallback(
+                            success=False, duration=fb_dur, timed_out=True
+                        )
+                        raise RuntimeError(
+                            f"Fallback 也超时 ({FALLBACK_TIMEOUT}s)，放弃处理 {input_path.name}"
+                        )
+                    except Exception as fb_exc:
+                        if not isinstance(fb_exc, RuntimeError) or "超时" not in str(fb_exc):
+                            fb_dur = time.time() - fallback_start
+                            app.state.metrics.record_fallback(success=False, duration=fb_dur)
+                        raise
 
             except Exception as conv_exc:
                 logger.exception("Conversion engine error: %s", conv_exc)
@@ -543,3 +793,9 @@ async def process_conversion_task(task: ConversionTask, client: httpx.AsyncClien
         except httpx.HTTPError as http_exc:
             logger.error("Callback failed: %s", http_exc)
             logger.debug("Callback payload: %s", callback.model_dump())
+
+
+@app.get("/metrics")
+async def metrics():
+    """返回可观测性指标快照。"""
+    return app.state.metrics.snapshot()
