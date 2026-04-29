@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -15,12 +16,13 @@ import uuid
 from functools import partial
 from multiprocessing import Process, Queue as MPQueue
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 from fastapi import FastAPI, status, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, AnyHttpUrl, ConfigDict
+from pydantic import BaseModel, AnyHttpUrl, ConfigDict, Field
 import contextlib
 
 from .conversion.workflow import run_conversion, run_fallback, VLM_SUPPORTED_SUFFIXES
@@ -54,6 +56,11 @@ FALLBACK_TIMEOUT = float(os.getenv("FORMA_FALLBACK_TIMEOUT", "300"))
 DATA_DIR = Path(os.getenv("FORMA_DATA_DIR", "./data"))
 CONVERSION_WORKERS = int(os.getenv("CONVERSION_WORKERS", "4"))
 QA_WORKERS = int(os.getenv("QA_WORKERS", "2"))
+CALLBACK_TOKEN = os.getenv("CALLBACK_TOKEN", "forma-secret-2024")
+MAX_INLINE_MD_BYTES = int(os.getenv("FORMA_MAX_INLINE_MD_BYTES", str(2 * 1024 * 1024)))
+MIN_CALLBACK_DELAY_MS = int(os.getenv("FORMA_MIN_CALLBACK_DELAY_MS", "500"))
+MAX_QUEUE_SIZE = int(os.getenv("FORMA_MAX_QUEUE_SIZE", "1000"))
+QUEUE_PUT_TIMEOUT = float(os.getenv("FORMA_QUEUE_PUT_TIMEOUT", "5.0"))
 
 logger.info("Configuration loaded:")
 logger.info("  - CONVERSION_TIMEOUT: %s seconds", CONVERSION_TIMEOUT)
@@ -62,14 +69,22 @@ logger.info("  - FALLBACK_TIMEOUT: %s seconds", FALLBACK_TIMEOUT)
 logger.info("  - DATA_DIR: %s", DATA_DIR)
 logger.info("  - CONVERSION_WORKERS: %s", CONVERSION_WORKERS)
 logger.info("  - QA_WORKERS: %s", QA_WORKERS)
+logger.info("  - CALLBACK_TOKEN configured: %s", bool(CALLBACK_TOKEN))
+logger.info("  - MAX_INLINE_MD_BYTES: %s bytes", MAX_INLINE_MD_BYTES)
+logger.info("  - MIN_CALLBACK_DELAY_MS: %s ms", MIN_CALLBACK_DELAY_MS)
+logger.info("  - MAX_QUEUE_SIZE: %s", MAX_QUEUE_SIZE)
+logger.info("  - QUEUE_PUT_TIMEOUT: %s seconds", QUEUE_PUT_TIMEOUT)
 
 class ConvertRequest(BaseModel):
     # Canonicalize to request_id as external and internal name
     model_config = ConfigDict(populate_by_name=True)
 
     request_id: str
+    document_id: str | None = None
     source_url: AnyHttpUrl
     callback_url: AnyHttpUrl
+    asset_upload_url: AnyHttpUrl | None = None
+    asset_upload_token: str | None = None
 
 
 class ConvertResponse(BaseModel):
@@ -86,14 +101,31 @@ class CallbackPayload(BaseModel):
     status: str
     markdown_content: str | None = None
     error_message: str | None = None
+    visual_facts: list[dict[str, object]] | None = None
+
+
+class KnowledgeHubCallbackPayload(BaseModel):
+    """Knowledge Hub specific callback payload."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    request_id: str = Field(..., description="Knowledge Hub task ID")
+    status: str = Field(..., description="completed or failed")
+    markdown: str | None = Field(None, description="Markdown content on success")
+    visual_facts: list[dict[str, object]] | None = Field(None, description="Optional visual facts")
+    error: str | None = Field(None, description="Error message on failure")
 
 
 # 定义一个任务类，用于存储任务信息
 class ConversionTask(BaseModel):
-    task_id: str # 任务ID
-    request_id: str # 请求ID
-    source_url: AnyHttpUrl # 任务来源URL
-    callback_url: AnyHttpUrl # 任务回调URL
+    task_id: str
+    request_id: str
+    document_id: str | None = None
+    source_url: AnyHttpUrl | None = None
+    callback_url: AnyHttpUrl
+    inline_markdown: str | None = None
+    asset_upload_url: AnyHttpUrl | None = None
+    asset_upload_token: str | None = None
 
 
 # 新增 FAQ 生成相关模型
@@ -130,11 +162,26 @@ class GenerateQATask(BaseModel):
     callback_url: AnyHttpUrl
 
 
+class ConvertByContentRequest(BaseModel):
+    """Request model for convert-by-content endpoint."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    request_id: str = Field(..., description="Request ID for idempotency and correlation")
+    document_id: str | None = Field(default=None, description="Knowledge Hub document ID used for asset binding")
+    markdown_content: str = Field(..., description="Markdown content to process")
+    callback_url: AnyHttpUrl = Field(..., description="Callback URL for results")
+    content_type: str = Field(default="text/markdown", description="Content type")
+    strategy: Strategy = Field(default=Strategy.AUTO, description="Processing strategy")
+    asset_upload_url: AnyHttpUrl | None = Field(default=None, description="Knowledge Hub internal asset upload endpoint")
+    asset_upload_token: str | None = Field(default=None, description="Knowledge Hub internal asset upload token")
+
+
 app = FastAPI()
 # 定义两个队列，一个用于处理文档转换任务，一个用于处理 FAQ 生成任务
 # 全局对象
-conversion_queue: asyncio.Queue[ConversionTask] = asyncio.Queue()
-qa_queue: asyncio.Queue[GenerateQATask] = asyncio.Queue()
+conversion_queue: asyncio.Queue[ConversionTask] = asyncio.Queue(maxsize=MAX_QUEUE_SIZE)
+qa_queue: asyncio.Queue[GenerateQATask] = asyncio.Queue(maxsize=MAX_QUEUE_SIZE)
 
 
 # ============================================================================
@@ -284,6 +331,188 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content={"detail": exc.errors()})
 
 
+def _is_knowledge_hub_callback(url: str) -> tuple[bool, str | None]:
+    """判断回调是否为 Knowledge Hub（query token 或路径特征）。"""
+    try:
+        parsed = urlparse(url)
+        token = parse_qs(parsed.query).get("token", [None])[0]
+        is_kh_path = "callback/forma/convert" in parsed.path
+        return bool(token) or is_kh_path, token
+    except Exception:
+        return False, None
+
+
+async def _send_callback(
+    client: httpx.AsyncClient,
+    callback_url: str,
+    callback: CallbackPayload,
+) -> None:
+    """统一的回调发送逻辑，兼容 Knowledge Hub 规范与旧格式."""
+
+    is_kh, token_in_query = _is_knowledge_hub_callback(callback_url)
+
+    headers: dict[str, str] = {}
+    if not token_in_query and CALLBACK_TOKEN:
+        headers["X-Callback-Token"] = CALLBACK_TOKEN
+
+    # Knowledge Hub 载荷
+    if is_kh:
+        kh_payload = KnowledgeHubCallbackPayload(
+            request_id=callback.request_id,
+            status=callback.status,
+            markdown=callback.markdown_content if callback.status == "completed" else None,
+            error=callback.error_message,
+            visual_facts=getattr(callback, "visual_facts", None),
+        ).model_dump(by_alias=True, exclude_none=True)
+        payload = kh_payload
+    else:
+        payload = callback.model_dump(by_alias=True, exclude_none=True)
+
+    logger.debug(
+        "Sending callback (KH=%s) to %s with keys: %s",
+        is_kh or bool(headers),
+        callback_url,
+        list(payload.keys()),
+    )
+
+    try:
+        await client.post(callback_url, json=payload, headers=headers or None)
+    except httpx.HTTPError as http_exc:
+        logger.error("Callback failed: %s", http_exc)
+        logger.debug("Callback payload: %s", payload)
+
+
+def _position_label(position_type: str, position_meta: dict[str, object]) -> str:
+    if position_type == "tabular_anchor":
+        sheet = str(position_meta.get("sheet", "") or "").strip()
+        from_row = int(position_meta.get("from_row", 0) or 0)
+        to_row = int(position_meta.get("to_row", 0) or 0)
+        from_col = int(position_meta.get("from_col", 0) or 0)
+        to_col = int(position_meta.get("to_col", 0) or 0)
+        from_col_label = str(position_meta.get("from_col_label", "") or "").strip()
+        to_col_label = str(position_meta.get("to_col_label", "") or "").strip()
+
+        row_label = ""
+        if from_row > 0:
+            row_label = f"row {from_row}"
+            if to_row > from_row:
+                row_label = f"rows {from_row}-{to_row}"
+
+        col_label = ""
+        if from_col_label:
+            col_label = f"col {from_col_label}"
+            if to_col_label and to_col_label != from_col_label:
+                col_label = f"cols {from_col_label}-{to_col_label}"
+        elif from_col > 0:
+            col_label = f"col {from_col}"
+            if to_col > from_col:
+                col_label = f"cols {from_col}-{to_col}"
+
+        parts = []
+        if sheet:
+            parts.append(f'sheet "{sheet}"')
+        if row_label:
+            parts.append(row_label)
+        if col_label:
+            parts.append(col_label)
+        return ", ".join(parts)
+
+    return ""
+
+
+async def _upload_visual_assets(
+    client: httpx.AsyncClient,
+    task: ConversionTask,
+    visual_assets: list,
+) -> list[dict[str, str]]:
+    if not visual_assets or not task.asset_upload_url or not task.asset_upload_token or not task.document_id:
+        return []
+
+    uploaded: list[dict[str, str]] = []
+    for asset in visual_assets:
+        try:
+            response = await client.post(
+                str(task.asset_upload_url),
+                headers={"X-Forma-Token": task.asset_upload_token},
+                data={
+                    "document_id": task.document_id,
+                    "paragraph_index": "0",
+                    "page": "0",
+                    "sha256": hashlib.sha256(asset.content).hexdigest(),
+                    "position_type": asset.position_type or "",
+                    "position_meta": json.dumps(asset.position_meta or {}, ensure_ascii=False),
+                },
+                files={
+                    "file": (
+                        asset.filename,
+                        asset.content,
+                        asset.mime_type,
+                    )
+                },
+                timeout=60.0,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            data = payload.get("data", payload)
+            asset_id = str(data.get("asset_id", "") or "").strip()
+            preview_url = str(data.get("url", data.get("cdn_url", "")) or "").strip()
+            if not asset_id or not preview_url:
+                raise RuntimeError(f"asset upload response missing asset_id/url: {payload}")
+            uploaded.append(
+                {
+                    "asset_id": asset_id,
+                    "preview_url": preview_url,
+                    "alt_text": asset.alt_text,
+                    "caption": asset.alt_text,
+                    "position_type": asset.position_type or "",
+                    "position_label": _position_label(asset.position_type, asset.position_meta or {}),
+                    "context_text": str((asset.position_meta or {}).get("context_text", "") or ""),
+                }
+            )
+        except Exception as upload_exc:
+            logger.warning(
+                "Visual asset upload failed for request_id=%s filename=%s error=%s",
+                task.request_id,
+                getattr(asset, "filename", "unknown"),
+                upload_exc,
+            )
+    return uploaded
+
+
+def _append_uploaded_visual_assets(markdown: str, uploaded_assets: list[dict[str, str]]) -> str:
+    if not uploaded_assets:
+        return markdown
+
+    lines = [markdown.strip()] if markdown.strip() else []
+    if lines:
+        lines.append("")
+    lines.append("## Visual Assets")
+    lines.append("")
+    for item in uploaded_assets:
+        heading = item["alt_text"]
+        if item["position_label"] and item["position_label"] not in heading:
+            heading = f'{heading} [{item["position_label"]}]'
+        lines.append(f"### {heading}")
+        lines.append(f'![{item["alt_text"]}]({item["preview_url"]}?asset_id={item["asset_id"]})')
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+
+
+def _visual_facts_from_uploaded_assets(uploaded_assets: list[dict[str, object]]) -> list[dict[str, object]]:
+    facts: list[dict[str, object]] = []
+    for item in uploaded_assets:
+        facts.append({
+            "asset_id": item.get("asset_id", ""),
+            "position_type": item.get("position_type", ""),
+            "position_label": item.get("position_label", ""),
+            "caption": item.get("caption", item.get("alt_text", "")),
+            "context_text": item.get("context_text", ""),
+        })
+    return facts
+
+
 def _on_worker_done(worker_type: str, worker_id: int, task: asyncio.Task) -> None:
     """Worker 退出时的回调：记录日志，如果是异常退出则自动重启。"""
     # 正常关闭流程中的取消，不需要重启
@@ -407,7 +636,53 @@ async def convert(request: ConvertRequest) -> ConvertResponse:
 
     task_id = str(uuid.uuid4())
     task = ConversionTask(task_id=task_id, **request.model_dump())
-    await conversion_queue.put(task)
+    try:
+        await asyncio.wait_for(conversion_queue.put(task), timeout=QUEUE_PUT_TIMEOUT)
+    except asyncio.TimeoutError:
+        from fastapi import HTTPException
+
+        logger.error("Conversion queue is full, request rejected: %s", task_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Server busy: conversion queue is full. Please retry later.",
+        )
+    return ConvertResponse(task_id=task_id)
+
+
+@app.post("/api/v1/convert-by-content", response_model=ConvertResponse, status_code=status.HTTP_202_ACCEPTED)
+async def convert_by_content(request: ConvertByContentRequest) -> ConvertResponse:
+    """Enqueue inline markdown content for normalization and callback."""
+
+    content_bytes = len(request.markdown_content.encode("utf-8"))
+    if content_bytes > MAX_INLINE_MD_BYTES:
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Markdown content exceeds allowed size ({MAX_INLINE_MD_BYTES} bytes)",
+        )
+
+    task_id = str(uuid.uuid4())
+    task = ConversionTask(
+        task_id=task_id,
+        request_id=request.request_id,
+        document_id=request.document_id,
+        callback_url=request.callback_url,
+        inline_markdown=request.markdown_content,
+        source_url=None,
+        asset_upload_url=request.asset_upload_url,
+        asset_upload_token=request.asset_upload_token,
+    )
+    try:
+        await asyncio.wait_for(conversion_queue.put(task), timeout=QUEUE_PUT_TIMEOUT)
+    except asyncio.TimeoutError:
+        from fastapi import HTTPException
+
+        logger.error("Conversion queue is full, request rejected: %s", task_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Server busy: conversion queue is full. Please retry later.",
+        )
     return ConvertResponse(task_id=task_id)
 
 
@@ -417,7 +692,16 @@ async def generate_qa(request: GenerateQARequest) -> GenerateQAResponse:
 
     task_id = str(uuid.uuid4())
     task = GenerateQATask(task_id=task_id, **request.model_dump())
-    await qa_queue.put(task)
+    try:
+        await asyncio.wait_for(qa_queue.put(task), timeout=QUEUE_PUT_TIMEOUT)
+    except asyncio.TimeoutError:
+        from fastapi import HTTPException
+
+        logger.error("QA queue is full, request rejected: %s", task_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Server busy: QA queue is full. Please retry later.",
+        )
     return GenerateQAResponse(task_id=task_id)
 
 
@@ -583,30 +867,37 @@ async def process_qa_task(task: GenerateQATask, client: httpx.AsyncClient) -> No
             "QA task processing failed: %s: %s", exc.__class__.__name__, exc
         )
     finally:
-        try:
-            callback_url = str(task.callback_url)
-            logger.debug(
-                "Sending callback to %s, status: %s", callback_url, callback.status
-            )
-
-            payload = callback.model_dump(by_alias=True)
-            await client.post(callback_url, json=payload)
-            logger.debug(
-                "Callback sent successfully with keys: %s", list(payload.keys())
-            )
-        except httpx.HTTPError as http_exc:
-            logger.error("Callback failed: %s", http_exc)
-            logger.debug("Callback payload: %s", callback.model_dump())
+        await _send_callback(client, str(task.callback_url), callback)
 
 
 async def process_conversion_task(task: ConversionTask, client: httpx.AsyncClient) -> None:
     """下载、转换并处理回调。使用进程隔离执行，超时可 kill 回收。"""
     app.state.metrics.record_conversion()
 
-    # 初始化回调 payload
+    start_time = time.time()
     callback = CallbackPayload(request_id=task.request_id, status="failed")
     input_path: Path | None = None
+    conversion_results = []
     try:
+        if task.inline_markdown is not None:
+            logger.debug(
+                "Task received: %s (request_id=%s, inline_markdown=True, size=%s bytes)",
+                task.task_id,
+                task.request_id,
+                len(task.inline_markdown.encode("utf-8")),
+            )
+            from .shared.utils.markdown_cleaner import MarkdownCleaner
+
+            callback.status = "completed"
+            callback.markdown_content = MarkdownCleaner.normalize_inline_markdown(task.inline_markdown)
+            elapsed_ms = (time.time() - start_time) * 1000
+            if elapsed_ms < MIN_CALLBACK_DELAY_MS:
+                await asyncio.sleep((MIN_CALLBACK_DELAY_MS - elapsed_ms) / 1000)
+            return
+
+        if task.source_url is None:
+            raise RuntimeError("source_url is required for file conversion tasks")
+
         logger.debug(
             "Task received: %s (request_id=%s, source_url=%s)",
             task.task_id,
@@ -665,7 +956,7 @@ async def process_conversion_task(task: ConversionTask, client: httpx.AsyncClien
                         recursive=False,
                         use_ocr_for_images=False,
                     )
-                    await run_in_subprocess(conversion_func, timeout=CONVERSION_TIMEOUT)
+                    conversion_results = await run_in_subprocess(conversion_func, timeout=CONVERSION_TIMEOUT)
                     logger.debug("Conversion completed successfully")
 
                 # 主流程超时 → 尝试 fallback（进程隔离 + 独立超时）
@@ -759,6 +1050,13 @@ async def process_conversion_task(task: ConversionTask, client: httpx.AsyncClien
                 output_files[0],
             )
             markdown = output_files[0].read_text(encoding="utf-8")
+            visual_assets = []
+            for result in conversion_results or []:
+                visual_assets.extend(getattr(result, "visual_assets", []) or [])
+            uploaded_assets = await _upload_visual_assets(client, task, visual_assets)
+            if uploaded_assets:
+                markdown = _append_uploaded_visual_assets(markdown, uploaded_assets)
+                callback.visual_facts = _visual_facts_from_uploaded_assets(uploaded_assets)
             callback.status = "completed"
             callback.markdown_content = markdown
             logger.debug(
@@ -769,9 +1067,10 @@ async def process_conversion_task(task: ConversionTask, client: httpx.AsyncClien
         import traceback
 
         tb_str = traceback.format_exc(limit=5)
-        file_info = (
-            f"File: {Path(str(task.source_url)).name}" if input_path else "Unknown file"
-        )
+        if task.source_url is not None:
+            file_info = f"File: {Path(str(task.source_url)).name}"
+        else:
+            file_info = "Inline markdown"
         callback.error_message = (
             f"{file_info} - {exc.__class__.__name__}: {exc}\n{tb_str}"
         )
@@ -779,20 +1078,7 @@ async def process_conversion_task(task: ConversionTask, client: httpx.AsyncClien
             "Task processing failed: %s: %s", exc.__class__.__name__, exc
         )
     finally:
-        try:
-            callback_url = str(task.callback_url)
-            logger.debug(
-                "Sending callback to %s, status: %s", callback_url, callback.status
-            )
-
-            payload = callback.model_dump(by_alias=True)
-            await client.post(callback_url, json=payload)
-            logger.debug(
-                "Callback sent successfully with keys: %s", list(payload.keys())
-            )
-        except httpx.HTTPError as http_exc:
-            logger.error("Callback failed: %s", http_exc)
-            logger.debug("Callback payload: %s", callback.model_dump())
+        await _send_callback(client, str(task.callback_url), callback)
 
 
 @app.get("/metrics")

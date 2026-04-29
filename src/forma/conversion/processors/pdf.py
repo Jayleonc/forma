@@ -231,14 +231,13 @@ class PdfProcessor(Processor):
                     ocr_results = {}
                     logger.debug("PdfProcessor: Pre-screening images with OCR")
 
-                    # 使用更大的线程池处理OCR预处理
-                    max_workers = min(32, os.cpu_count() * 4)  # 限制最大线程数，避免资源耗尽
+                    # 使用受限的线程池处理 OCR 预处理（降低并发，减少 CPU/内存压力）
+                    max_workers = 2
                     logger.debug(
                         "PdfProcessor: Using thread pool with %s workers for OCR pre-screening",
                         max_workers,
                     )
 
-                    # 线程池的某个线程里开启多个子线程，并行处理OCR预处理
                     with ThreadPoolExecutor(max_workers=max_workers) as executor:
                         futures = [
                             executor.submit(ocr_image_file, str(info["path"]))
@@ -288,7 +287,7 @@ class PdfProcessor(Processor):
                         
                         if valid_images:
                             # 使用批量处理器并发处理图片
-                            max_workers = min(8, os.cpu_count() * 2)  # 限制并发数，避免资源耗尽
+                            max_workers = 2
                             batch_processor = BatchProcessor(max_workers=max_workers)
                             
                             # 定义图片处理函数（返回值交由 on_success 汇总）
