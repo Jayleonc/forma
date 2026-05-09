@@ -102,6 +102,8 @@ class CallbackPayload(BaseModel):
     markdown_content: str | None = None
     error_message: str | None = None
     visual_facts: list[dict[str, object]] | None = None
+    asset_manifest: list[dict[str, object]] | None = None
+    warnings: list[dict[str, object]] | None = None
 
 
 class KnowledgeHubCallbackPayload(BaseModel):
@@ -113,6 +115,8 @@ class KnowledgeHubCallbackPayload(BaseModel):
     status: str = Field(..., description="completed or failed")
     markdown: str | None = Field(None, description="Markdown content on success")
     visual_facts: list[dict[str, object]] | None = Field(None, description="Optional visual facts")
+    asset_manifest: list[dict[str, object]] | None = Field(None, description="Optional uploaded asset manifest")
+    warnings: list[dict[str, object]] | None = Field(None, description="Optional non-fatal ingestion warnings")
     error: str | None = Field(None, description="Error message on failure")
 
 
@@ -363,6 +367,8 @@ async def _send_callback(
             markdown=callback.markdown_content if callback.status == "completed" else None,
             error=callback.error_message,
             visual_facts=getattr(callback, "visual_facts", None),
+            asset_manifest=getattr(callback, "asset_manifest", None),
+            warnings=getattr(callback, "warnings", None),
         ).model_dump(by_alias=True, exclude_none=True)
         payload = kh_payload
     else:
@@ -424,13 +430,19 @@ async def _upload_visual_assets(
     client: httpx.AsyncClient,
     task: ConversionTask,
     visual_assets: list,
-) -> list[dict[str, str]]:
+) -> list[dict[str, object]]:
     if not visual_assets or not task.asset_upload_url or not task.asset_upload_token or not task.document_id:
         return []
 
-    uploaded: list[dict[str, str]] = []
+    uploaded: list[dict[str, object]] = []
     for asset in visual_assets:
         try:
+            sha256 = hashlib.sha256(asset.content).hexdigest()
+            source_ref = str(getattr(asset, "source_ref", "") or "").strip()
+            asset_role = str(getattr(asset, "asset_role", "") or "embedded_image").strip()
+            context_text = str(getattr(asset, "context_text", "") or "").strip()
+            ai_description = str(getattr(asset, "ai_description", "") or asset.alt_text or "").strip()
+            original_uri = str(getattr(asset, "original_uri", "") or "").strip()
             response = await client.post(
                 str(task.asset_upload_url),
                 headers={"X-Forma-Token": task.asset_upload_token},
@@ -438,9 +450,13 @@ async def _upload_visual_assets(
                     "document_id": task.document_id,
                     "paragraph_index": "0",
                     "page": "0",
-                    "sha256": hashlib.sha256(asset.content).hexdigest(),
+                    "sha256": sha256,
                     "position_type": asset.position_type or "",
                     "position_meta": json.dumps(asset.position_meta or {}, ensure_ascii=False),
+                    "source_ref": source_ref,
+                    "asset_role": asset_role,
+                    "ai_description": ai_description,
+                    "original_uri": original_uri,
                 },
                 files={
                     "file": (
@@ -464,9 +480,17 @@ async def _upload_visual_assets(
                     "preview_url": preview_url,
                     "alt_text": asset.alt_text,
                     "caption": asset.alt_text,
+                    "source_ref": source_ref,
+                    "asset_role": asset_role,
+                    "filename": asset.filename,
+                    "mime_type": asset.mime_type,
+                    "sha256": sha256,
                     "position_type": asset.position_type or "",
                     "position_label": _position_label(asset.position_type, asset.position_meta or {}),
-                    "context_text": str((asset.position_meta or {}).get("context_text", "") or ""),
+                    "position_meta": asset.position_meta or {},
+                    "context_text": context_text or str((asset.position_meta or {}).get("context_text", "") or ""),
+                    "ai_description": ai_description,
+                    "original_uri": original_uri,
                 }
             )
         except Exception as upload_exc:
@@ -505,12 +529,32 @@ def _visual_facts_from_uploaded_assets(uploaded_assets: list[dict[str, object]])
     for item in uploaded_assets:
         facts.append({
             "asset_id": item.get("asset_id", ""),
+            "source_ref": item.get("source_ref", ""),
             "position_type": item.get("position_type", ""),
             "position_label": item.get("position_label", ""),
             "caption": item.get("caption", item.get("alt_text", "")),
             "context_text": item.get("context_text", ""),
         })
     return facts
+
+
+def _asset_manifest_from_uploaded_assets(uploaded_assets: list[dict[str, object]]) -> list[dict[str, object]]:
+    manifest: list[dict[str, object]] = []
+    for item in uploaded_assets:
+        manifest.append({
+            "source_ref": item.get("source_ref", ""),
+            "asset_role": item.get("asset_role", "embedded_image"),
+            "filename": item.get("filename", ""),
+            "mime_type": item.get("mime_type", ""),
+            "sha256": item.get("sha256", ""),
+            "position_type": item.get("position_type", ""),
+            "position_meta": item.get("position_meta", {}),
+            "context_text": item.get("context_text", ""),
+            "ai_description": item.get("ai_description", ""),
+            "original_uri": item.get("original_uri", ""),
+            "asset_id": item.get("asset_id", ""),
+        })
+    return manifest
 
 
 def _on_worker_done(worker_type: str, worker_id: int, task: asyncio.Task) -> None:
@@ -1057,6 +1101,7 @@ async def process_conversion_task(task: ConversionTask, client: httpx.AsyncClien
             if uploaded_assets:
                 markdown = _append_uploaded_visual_assets(markdown, uploaded_assets)
                 callback.visual_facts = _visual_facts_from_uploaded_assets(uploaded_assets)
+                callback.asset_manifest = _asset_manifest_from_uploaded_assets(uploaded_assets)
             callback.status = "completed"
             callback.markdown_content = markdown
             logger.debug(

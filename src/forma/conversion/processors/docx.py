@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 import os
 import time
 from pathlib import Path
@@ -21,7 +22,7 @@ from ...shared.utils.retry import retry
 from ...ocr import ocr_image_file, AdvancedOCRClient
 from ...vision import VLMClient
 from ...shared.config import get_ocr_config
-from .base import ProcessingResult, Processor
+from .base import ExtractedVisualAsset, ProcessingResult, Processor
 
 
 logger = logging.getLogger(__name__)
@@ -112,19 +113,32 @@ class DocxProcessor(Processor):
         doc = Document(input_path)
         markdown_parts = []
         image_count = 0
+        visual_assets: list[ExtractedVisualAsset] = []
+        paragraph_index = 0
 
         # Process blocks (paragraphs and tables) in order
         for block in self._iter_block_items(doc):
             if isinstance(block, Paragraph):
+                paragraph_index += 1
+                text = block.text.strip()
                 # Process images within the paragraph
-                if self._vlm_client and "graphicData" in block._p.xml:
+                if "graphicData" in block._p.xml:
                     for r_id in self._get_image_rids(block):
                         try:
                             image_part = doc.part.rels[r_id].target_part
                             image_bytes = image_part.blob
-                            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
+                            part_name = str(getattr(image_part, "partname", "") or "").lstrip("/")
+                            filename = Path(part_name).name or f"{r_id}.png"
+                            suffix = Path(filename).suffix or ".png"
+                            mime_type = (
+                                str(getattr(image_part, "content_type", "") or "").strip()
+                                or mimetypes.guess_type(filename)[0]
+                                or "image/png"
+                            )
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
                                 temp_file.write(image_bytes)
                                 temp_image_path = Path(temp_file.name)
+                            description = ""
 
                             # 先使用原有OCR进行预处理，判断图片是否值得进一步处理
                             try:
@@ -138,7 +152,6 @@ class DocxProcessor(Processor):
 
                                 # 获取文件大小
                                 file_size = os.path.getsize(temp_image_path)
-                                description = ""
 
                                 # 仅处理原有OCR预处理识别出有足够文字的图片
                                 if len(ocr_result.strip()) >= self._min_text_chars:
@@ -220,10 +233,34 @@ class DocxProcessor(Processor):
                                     except Exception as e:
                                         logger.error("DocxProcessor: VLM fallback failed: %s", e)
 
+                            source_ref = f"docx:{r_id}:{part_name or filename}"
+                            context_text = text or description
+                            alt_text = description or f"DOCX image {filename}"
+                            visual_assets.append(
+                                ExtractedVisualAsset(
+                                    filename=filename,
+                                    content=image_bytes,
+                                    mime_type=mime_type,
+                                    alt_text=alt_text,
+                                    position_type="paragraph",
+                                    position_meta={
+                                        "paragraph_index": paragraph_index,
+                                        "relationship_id": r_id,
+                                        "partname": part_name,
+                                        "context_text": context_text,
+                                    },
+                                    source_ref=source_ref,
+                                    asset_role="embedded_image",
+                                    context_text=context_text,
+                                    ai_description=description,
+                                    original_uri=part_name,
+                                )
+                            )
+                            image_count += 1
+
                             if description:
                                 markdown_parts.append(
                                     f"\n\n> **image desc**: {description}\n\n")
-                                image_count += 1
                             else:
                                 logger.warning("DocxProcessor: No content extracted for image")
                                 markdown_parts.append("\n\n> [无法识别图片内容]\n\n")
@@ -239,7 +276,6 @@ class DocxProcessor(Processor):
                             markdown_parts.append("\n\n> [图片处理失败]\n\n")
 
                 # Process text
-                text = block.text.strip()
                 if text:
                     markdown_parts.append(text)
 
@@ -261,6 +297,7 @@ class DocxProcessor(Processor):
             text_char_count=text_len,
             image_count=image_count,
             low_confidence=text_len == 0,
+            visual_assets=visual_assets,
         )
 
     def _get_image_rids(self, p: Paragraph) -> list[str]:

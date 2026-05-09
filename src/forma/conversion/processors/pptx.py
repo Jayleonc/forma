@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 import os
 import time
 import tempfile
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import List, Optional
 
 
-from .base import Processor, ProcessingResult
+from .base import ExtractedVisualAsset, Processor, ProcessingResult
 from ...ocr import parse_image_to_markdown, AdvancedOCRClient
 from ...vision import VlmParser, VLMClient
 from ...shared.utils.converters import convert_to_pdf
@@ -120,6 +121,7 @@ class PptxProcessor(Processor):
         complex_slide_texts: dict[int, str] = {}
         complex_indices: List[int] = []
         image_count = 0
+        visual_assets: list[ExtractedVisualAsset] = []
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -145,9 +147,33 @@ class PptxProcessor(Processor):
                     if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
                         image = shape.image
                         ext = image.ext or "png"
+                        shape_id = getattr(shape, "shape_id", len(images) + 1)
+                        image_blob = image.blob
                         img_path = tmp / f"slide{idx}_{len(images)}.{ext}"
-                        img_path.write_bytes(image.blob)
+                        img_path.write_bytes(image_blob)
                         images.append(img_path)
+                        source_ref = f"pptx:slide{idx + 1}:shape{shape_id}"
+                        filename = f"slide{idx + 1}-shape{shape_id}.{ext}"
+                        mime_type = mimetypes.guess_type(filename)[0] or "image/png"
+                        context_text = "\n".join(texts).strip()
+                        visual_assets.append(
+                            ExtractedVisualAsset(
+                                filename=filename,
+                                content=image_blob,
+                                mime_type=mime_type,
+                                alt_text=f"PPTX slide {idx + 1} picture {shape_id}",
+                                position_type="slide",
+                                position_meta={
+                                    "slide": idx + 1,
+                                    "shape_id": shape_id,
+                                    "context_text": context_text,
+                                },
+                                source_ref=source_ref,
+                                asset_role="embedded_image",
+                                context_text=context_text,
+                                original_uri=source_ref,
+                            )
+                        )
 
                 slide_text = "\n".join(texts)
                 char_count = len(slide_text.replace("\n", "").strip())
@@ -282,6 +308,26 @@ class PptxProcessor(Processor):
 
                         slide_markdowns[idx] = final_markdown
                         image_count += 1
+                        source_ref = f"pptx:slide{idx + 1}:render"
+                        visual_assets.append(
+                            ExtractedVisualAsset(
+                                filename=f"slide{idx + 1}-render.png",
+                                content=img_path.read_bytes(),
+                                mime_type="image/png",
+                                alt_text=f"PPTX slide {idx + 1} rendered view",
+                                position_type="slide",
+                                position_meta={
+                                    "slide": idx + 1,
+                                    "render": True,
+                                    "context_text": final_markdown,
+                                },
+                                source_ref=source_ref,
+                                asset_role="embedded_image",
+                                context_text=final_markdown,
+                                ai_description=final_markdown,
+                                original_uri=source_ref,
+                            )
+                        )
                         logger.debug(
                             "PptxProcessor: Completed processing slide %s", idx + 1
                         )
@@ -312,6 +358,7 @@ class PptxProcessor(Processor):
             text_char_count=text_len,
             image_count=image_count,
             low_confidence=text_len == 0,
+            visual_assets=visual_assets,
         )
 
 

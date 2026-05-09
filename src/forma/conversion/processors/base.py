@@ -18,6 +18,11 @@ class ExtractedVisualAsset:
     alt_text: str
     position_type: str = ""
     position_meta: dict[str, Any] = field(default_factory=dict)
+    source_ref: str = ""
+    asset_role: str = "embedded_image"
+    context_text: str = ""
+    ai_description: str = ""
+    original_uri: str = ""
 
 
 @dataclass

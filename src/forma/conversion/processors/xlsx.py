@@ -130,9 +130,16 @@ class XlsxProcessor(Processor):
             anchor = self._extract_anchor(image.anchor)
             row_values = self._row_values(rows, anchor["from_row"])
             alt_text = self._build_alt_text(sheet_name, anchor, headers, row_values)
+            context_text = self._build_row_context(headers, row_values)
             extension = self._image_extension(image)
             mime_type = self._image_mime_type(extension)
             filename = f"{sheet_name}-r{anchor['from_row'] or 0}-c{anchor['from_col'] or 0}-{idx}.{extension}"
+            media_path = self._image_media_path(image, filename)
+            source_ref = (
+                f"xlsx:sheet={sheet_name};from_row={anchor['from_row']};"
+                f"to_row={anchor['to_row']};from_col={anchor['from_col']};"
+                f"to_col={anchor['to_col']};media={media_path}"
+            )
             assets.append(
                 ExtractedVisualAsset(
                     filename=filename,
@@ -150,8 +157,14 @@ class XlsxProcessor(Processor):
                         "from_col_label": self._column_label(anchor["from_col"]),
                         "to_col_label": self._column_label(anchor["to_col"]),
                         "anchor_type": anchor["anchor_type"],
-                        "context_text": self._build_row_context(headers, row_values),
+                        "context_text": context_text,
+                        "media_path": media_path,
                     },
+                    source_ref=source_ref,
+                    asset_role="embedded_image",
+                    context_text=context_text,
+                    ai_description=alt_text,
+                    original_uri=media_path,
                 )
             )
 
@@ -264,9 +277,16 @@ class XlsxProcessor(Processor):
     @staticmethod
     def _image_extension(image) -> str:
         image_format = (getattr(image, "format", "") or "").lower()
-        if image_format in {"png", "jpeg", "jpg", "gif"}:
+        if image_format in {"png", "jpeg", "jpg", "gif", "webp"}:
             return "jpg" if image_format == "jpeg" else image_format
         return "png"
+
+    @staticmethod
+    def _image_media_path(image, filename: str) -> str:
+        raw_path = str(getattr(image, "path", "") or "").strip().lstrip("/")
+        if raw_path:
+            return raw_path
+        return f"xl/media/{filename}"
 
     @staticmethod
     def _image_mime_type(extension: str) -> str:
@@ -274,6 +294,8 @@ class XlsxProcessor(Processor):
             return "image/jpeg"
         if extension == "gif":
             return "image/gif"
+        if extension == "webp":
+            return "image/webp"
         return "image/png"
 
     @staticmethod

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 import fitz
 import os
 import tempfile
@@ -19,7 +20,7 @@ from .batch_processor import BatchProcessor
 from ...ocr import ocr_image_file, AdvancedOCRClient
 from ...vision import VLMClient
 from ...shared.config import get_ocr_config
-from .base import ProcessingResult, Processor
+from .base import ExtractedVisualAsset, ProcessingResult, Processor
 
 
 logger = logging.getLogger(__name__)
@@ -140,6 +141,8 @@ class PdfProcessor(Processor):
         process_start_time = time.time()
         logger.debug("PdfProcessor: Starting to process %s", input_path)
         path = Path(input_path)
+        image_info: List[Dict[str, Any]] = []
+        visual_assets: List[ExtractedVisualAsset] = []
 
         try:
             logger.debug(
@@ -178,9 +181,6 @@ class PdfProcessor(Processor):
                 "PdfProcessor: PDF opened successfully, pages: %s", len(doc)
             )
 
-            # 存储图片信息，包括路径和位置信息
-            image_info: List[Dict[str, Any]] = []
-
             with tempfile.TemporaryDirectory() as tmpdir:
                 tmp = Path(tmpdir)
                 logger.debug("PdfProcessor: Created temp directory: %s", tmp)
@@ -214,6 +214,9 @@ class PdfProcessor(Processor):
                             "path": img_path,
                             "page": page_index,
                             "index": img_index,
+                            "xref": xref,
+                            "ext": ext,
+                            "content": img_bytes,
                         })
                         logger.debug("PdfProcessor: Saved image to %s", img_path)
 
@@ -511,6 +514,8 @@ class PdfProcessor(Processor):
                 len(markdown),
             )
 
+        visual_assets = self._build_visual_assets(image_info, image_descriptions if "image_descriptions" in locals() else [])
+
         low_conf = text_len < 50
         logger.debug(
             "PdfProcessor: Confidence assessment: %s (text length: %s)",
@@ -521,8 +526,9 @@ class PdfProcessor(Processor):
         result = ProcessingResult(
             markdown_content=markdown,
             text_char_count=text_len,
-            image_count=len(image_info) if 'image_info' in locals() else 0,
+            image_count=len(image_info),
             low_confidence=low_conf,
+            visual_assets=visual_assets,
         )
         total_elapsed = time.time() - process_start_time
         logger.debug(
@@ -530,6 +536,61 @@ class PdfProcessor(Processor):
             total_elapsed,
         )
         return result
+
+    def _build_visual_assets(
+        self,
+        image_info: List[Dict[str, Any]],
+        image_descriptions: List[Tuple[Path, str, Dict[str, Any]]],
+    ) -> List[ExtractedVisualAsset]:
+        descriptions_by_path = {
+            str(img_path): description
+            for img_path, description, _ in image_descriptions
+            if str(description or "").strip()
+        }
+        visual_assets: List[ExtractedVisualAsset] = []
+        for info in image_info:
+            page_num = int(info.get("page", 0)) + 1
+            image_index = int(info.get("index", 0)) + 1
+            xref = info.get("xref", "")
+            ext = str(info.get("ext", "png") or "png").lower()
+            content = info.get("content")
+            if not content:
+                try:
+                    content = Path(info["path"]).read_bytes()
+                except Exception:
+                    logger.warning(
+                        "PdfProcessor: Skipping visual asset without content: page=%s image=%s",
+                        page_num,
+                        image_index,
+                    )
+                    continue
+
+            filename = f"pdf-p{page_num}-img{image_index}.{ext}"
+            mime_type = mimetypes.guess_type(filename)[0] or "image/png"
+            description = descriptions_by_path.get(str(info.get("path", "")), "")
+            alt_text = description or f"PDF image page {page_num} image {image_index}"
+            source_ref = f"pdf:p{page_num}:img{image_index}:xref{xref}"
+            visual_assets.append(
+                ExtractedVisualAsset(
+                    filename=filename,
+                    content=content,
+                    mime_type=mime_type,
+                    alt_text=alt_text,
+                    position_type="page",
+                    position_meta={
+                        "page": page_num,
+                        "image_index": image_index,
+                        "xref": xref,
+                        "context_text": description,
+                    },
+                    source_ref=source_ref,
+                    asset_role="embedded_image",
+                    context_text=description,
+                    ai_description=description,
+                    original_uri=source_ref,
+                )
+            )
+        return visual_assets
 
 
 __all__ = ["PdfProcessor"]
